@@ -53,17 +53,26 @@ void clock_pulse(void)
 unsigned long clock_wait_tick(unsigned long *last)
 {
     if (!last)
-        return 0; /* guard: null pointer */
+        return 0;
 
     clock_init();
 
     pthread_mutex_lock(&clock_mutex);
-    while (clock_tick <= *last)
-    {
+    while (clock_tick <= *last) {
         pthread_cond_wait(&clock_cond, &clock_mutex);
     }
     *last = clock_tick;
-    unsigned long result = clock_tick;
     pthread_mutex_unlock(&clock_mutex);
-    return result;
+    return *last;
+}
+
+unsigned long clock_get_tick(void)
+{
+    clock_init();
+    
+    pthread_mutex_lock(&clock_mutex);
+    unsigned long tick = clock_tick;
+    pthread_mutex_unlock(&clock_mutex);
+    
+    return tick;
 }

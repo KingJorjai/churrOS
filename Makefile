@@ -3,32 +3,71 @@ CC := gcc
 CFLAGS := -Wall -Wextra -O2 -Iinclude
 LDFLAGS := -lpthread
 
-# Fuentes y objetos de la biblioteca
-SRC := source/clock.c
-OBJ := build/clock.o
-LIB := build/libclock.a
+# Directorios
+SRC_DIR := source
+BUILD_DIR := build
+INCLUDE_DIR := include
+TEST_DIR := tests
+
+# Fuentes del kernel
+KERNEL_SOURCES := $(SRC_DIR)/clock.c \
+                  $(SRC_DIR)/timer.c \
+                  $(SRC_DIR)/pcb.c \
+                  $(SRC_DIR)/process_queue.c \
+                  $(SRC_DIR)/machine.c \
+				  $(SRC_DIR)/logging.c \
+                  $(SRC_DIR)/kernel.c \
+                  $(SRC_DIR)/main.c
+
+# Objetos del kernel
+KERNEL_OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(KERNEL_SOURCES))
+
+# Ejecutable principal
+KERNEL_BIN := $(BUILD_DIR)/churros
+
+# Biblioteca (para tests)
+LIB_SOURCES := $(SRC_DIR)/clock.c \
+               $(SRC_DIR)/timer.c \
+               $(SRC_DIR)/pcb.c \
+               $(SRC_DIR)/process_queue.c \
+               $(SRC_DIR)/machine.c \
+			   $(SRC_DIR)/kernel.c \
+			   $(SRC_DIR)/logging.c
+LIB_OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/lib_%.o,$(LIB_SOURCES))
+LIB := $(BUILD_DIR)/libchurros.a
 
 # Tests
-TEST_SRC := tests/test_clock.c
-TEST_BIN := build/test_clock
+TEST_SRC := $(TEST_DIR)/test_clock.c
+TEST_BIN := $(BUILD_DIR)/test_clock
 
-.PHONY: all clean test run-test
+.PHONY: all clean test run-test run
 
-all: $(LIB)
+all: $(KERNEL_BIN)
 
-build:
-	mkdir -p build
+# Crear directorio build
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-$(OBJ): build $(SRC)
-	$(CC) $(CFLAGS) -c $(SRC) -o $(OBJ)
+# Compilar objetos del kernel
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(LIB): $(OBJ)
-	@mkdir -p $(dir $(LIB))
-	ar rcs $(LIB) $(OBJ)
+# Compilar objetos de la biblioteca (sin main)
+$(BUILD_DIR)/lib_%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Enlazar el ejecutable del kernel
+$(KERNEL_BIN): $(KERNEL_OBJECTS)
+	$(CC) $(CFLAGS) $(KERNEL_OBJECTS) $(LDFLAGS) -o $(KERNEL_BIN)
+	@echo "Kernel compilado exitosamente: $(KERNEL_BIN)"
+
+# Crear biblioteca estática (para tests)
+$(LIB): $(LIB_OBJECTS)
+	ar rcs $(LIB) $(LIB_OBJECTS)
 
 # Compilar tests
 $(TEST_BIN): $(LIB) $(TEST_SRC)
-	$(CC) $(CFLAGS) $(TEST_SRC) -L./build -lclock $(LDFLAGS) -o $(TEST_BIN)
+	$(CC) $(CFLAGS) $(TEST_SRC) -L./build -lchurros $(LDFLAGS) -o $(TEST_BIN)
 
 # Target para compilar tests
 test: $(TEST_BIN)
@@ -39,5 +78,10 @@ run-test: $(TEST_BIN)
 	@echo "Ejecutando tests..."
 	@./$(TEST_BIN)
 
+# Target para ejecutar el kernel
+run: $(KERNEL_BIN)
+	@echo "Ejecutando churrOS..."
+	@./$(KERNEL_BIN)
+
 clean:
-	rm -rf build
+	rm -rf $(BUILD_DIR)

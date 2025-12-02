@@ -16,6 +16,7 @@ extern "C" {
 typedef struct {
     uint32_t period;           /* Periodo del timer en ticks */
     uint32_t tick_count;       /* Contador de ticks desde la última interrupción */
+    uint32_t interrupts_generated; /* Contador total de interrupciones generadas */
     pthread_mutex_t mutex;
     pthread_cond_t interrupt_cond;
     int interrupt_pending;     /* Flag de interrupción pendiente */
@@ -35,6 +36,14 @@ void churros_timer_wait_interrupt(Timer* timer);
 
 /* Verificar si hay una interrupción pendiente sin bloquear */
 int churros_timer_check_interrupt(Timer* timer);
+
+/* Obtener el número total de interrupciones generadas (seguro para hilos) */
+uint32_t churros_timer_get_generated(Timer* timer);
+
+/* Forzar el estado de interrupción y despertar a los hilos que esperan
+ * Útil para detener el kernel y desbloquear hilos que esperan por una interrupción
+ */
+void churros_timer_wake(Timer* timer);
 
 #ifdef __cplusplus
 }

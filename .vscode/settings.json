@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        ".als.json": "jsonc",
+        "**/debian/*.install": "plain",
+        "pcb.h": "c",
+        "machine.h": "c",
+        "limits": "c",
+        "*.rh": "c"
+    }
+}
