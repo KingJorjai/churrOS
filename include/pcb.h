@@ -14,6 +14,7 @@ extern "C" {
 
 typedef struct {
     uint32_t pid;          /* Process ID */
+    uint32_t ttl;          /* Time To Live del proceso (en ticks) */
 } PCB;
 
 /* Crear un nuevo PCB con un PID dado y tiempo de vida aleatorio */

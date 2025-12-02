@@ -282,7 +282,7 @@ static int kernel_is_running(Kernel* kernel)
 {
     if (!kernel)
         return 0;
-        
+
     return kernel->running;
 }
 
@@ -333,7 +333,8 @@ static void* process_generator_thread_func(void* arg)
 
         if (pcb) {
             process_queue_enqueue(kernel->process_queue, pcb);
-            printf("[ProcessGenerator] Nuevo proceso creado: PID=%u\n", pcb->pid);
+            printf("[ProcessGenerator] Nuevo proceso creado: PID=%u, TTL=%u\n", 
+                   pcb->pid, pcb->ttl);
         } else {
             fprintf(stderr, "[ProcessGenerator] Error al crear el proceso\n");
         }

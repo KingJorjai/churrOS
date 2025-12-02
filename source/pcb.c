@@ -14,6 +14,8 @@ PCB* pcb_create(uint32_t pid)
         return NULL;
     
     pcb->pid = pid;
+    /* Tiempo de vida aleatorio entre 1 y 100 ticks (por ejemplo) */
+    pcb->ttl = (rand() % 100) + 1;
     
     return pcb;
 }
