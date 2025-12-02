@@ -43,7 +43,7 @@ typedef struct {
     pthread_t scheduler_thread;
     pthread_t process_gen_thread;
     
-    int running;
+    volatile int running;
     pthread_mutex_t running_mutex;
     
     uint32_t next_pid;

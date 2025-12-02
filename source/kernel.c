@@ -280,10 +280,10 @@ static void* procgen_timer_thread_func(void* arg)
 
 static int kernel_is_running(Kernel* kernel)
 {
-    pthread_mutex_lock(&kernel->running_mutex);
-    int running = kernel->running;
-    pthread_mutex_unlock(&kernel->running_mutex);
-    return running;
+    if (!kernel)
+        return 0;
+        
+    return kernel->running;
 }
 
 static void* scheduler_thread_func(void* arg)
