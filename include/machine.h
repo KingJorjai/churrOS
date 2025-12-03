@@ -9,6 +9,8 @@
 #include <stdint.h>
 #include <pthread.h>
 
+#include "pcb.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -16,7 +18,7 @@ extern "C" {
 /* Hardware thread (hilo hardware) */
 typedef struct {
     uint32_t hw_thread_id;
-    uint32_t current_pid;  /* PID del proceso asignado (0 = idle) */
+    PCB* current_pcb;      /* Proceso asignado (NULL = idle) */
 } HWThread;
 
 /* Core (núcleo) */

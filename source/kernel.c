@@ -302,12 +302,71 @@ static void* scheduler_thread_func(void* arg)
             break;
         
         activation_count++;
-        printf("[Scheduler] Activación #%u por interrupción del timer\n", activation_count);
         
+        /* Bloquear la máquina para realizar cambios de contexto de forma segura */
+        pthread_mutex_lock(&kernel->machine->mutex);
+        
+        Machine* m = kernel->machine;
+        for (uint32_t i = 0; i < m->num_cpus; i++) {
+            for (uint32_t j = 0; j < m->cpus[i].num_cores; j++) {
+                for (uint32_t k = 0; k < m->cpus[i].cores[j].num_hw_threads; k++) {
+                    HWThread* thread = &m->cpus[i].cores[j].hw_threads[k];
+                    
+                    /* 1. Verificar procesos terminados o expiración de quantum (Round Robin) */
+                    if (thread->current_pcb) {
+                        PCB* pcb = thread->current_pcb;
+                        
+                        if (pcb->ttl == 0) {
+                            /* Proceso terminado */
+                            printf("[Scheduler] Proceso PID=%u terminado en CPU %u Core %u Thread %u\n",
+                                   pcb->pid, i, j, k);
+                            pcb->state = PROCESS_STATE_TERMINATED;
+                            pcb_destroy(pcb);
+                            thread->current_pcb = NULL;
+                        } else {
+                            /* Quantum expirado (Round Robin): desalojar y volver a encolar */
+                            /* Nota: Asumimos que el periodo del timer es el quantum */
+                            pcb->state = PROCESS_STATE_READY;
+                            pcb->cpu_id = -1;
+                            pcb->core_id = -1;
+                            pcb->hw_thread_id = -1;
+                            
+                            /* Desalojar */
+                            thread->current_pcb = NULL;
+                            
+                            /* Volver a encolar */
+                            process_queue_enqueue(kernel->process_queue, pcb);
+                            /* printf("[Scheduler] Preemption PID=%u (TTL=%u)\n", pcb->pid, pcb->ttl); */
+                        }
+                    }
+                    
+                    /* 2. Asignar procesos a hilos libres */
+                    if (!thread->current_pcb && !process_queue_is_empty(kernel->process_queue)) {
+                        PCB* next_pcb = process_queue_dequeue(kernel->process_queue);
+                        if (next_pcb) {
+                            next_pcb->state = PROCESS_STATE_RUNNING;
+                            next_pcb->cpu_id = i;
+                            next_pcb->core_id = j;
+                            next_pcb->hw_thread_id = k;
+                            
+                            thread->current_pcb = next_pcb;
+                            printf("[Scheduler] Dispatch PID=%u a CPU %u Core %u Thread %u (TTL=%u)\n",
+                                   next_pcb->pid, i, j, k, next_pcb->ttl);
+                        }
+                    }
+                }
+            }
+        }
+        
+        pthread_mutex_unlock(&kernel->machine->mutex);
+        
+        /* Debug info */
+        /*
         uint32_t queue_size = process_queue_size(kernel->process_queue);
         if (queue_size > 0) {
             printf("[Scheduler] Procesos en cola: %u\n", queue_size);
         }
+        */
     }
     
     printf("[Scheduler] Terminado (activaciones totales: %u)\n", activation_count);
@@ -332,6 +391,7 @@ static void* process_generator_thread_func(void* arg)
         PCB* pcb = pcb_create(pid);
 
         if (pcb) {
+            pcb->state = PROCESS_STATE_READY;
             process_queue_enqueue(kernel->process_queue, pcb);
             printf("[ProcessGenerator] Nuevo proceso creado: PID=%u, TTL=%u\n", 
                    pcb->pid, pcb->ttl);

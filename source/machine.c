@@ -11,7 +11,7 @@ static void init_hw_threads(HWThread* threads, uint32_t count)
 {
     for (uint32_t i = 0; i < count; i++) {
         threads[i].hw_thread_id = i;
-        threads[i].current_pid = 0;
+        threads[i].current_pcb = NULL;
     }
 }
 
@@ -109,7 +109,21 @@ void machine_advance_cycle(Machine* machine)
         return;
     
     pthread_mutex_lock(&machine->mutex);
-    /* Placeholder para futuras instrucciones de procesos */
+    
+    for (uint32_t i = 0; i < machine->num_cpus; i++) {
+        for (uint32_t j = 0; j < machine->cpus[i].num_cores; j++) {
+            for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
+                HWThread* thread = &machine->cpus[i].cores[j].hw_threads[k];
+                if (thread->current_pcb) {
+                    /* Consumir tiempo del proceso */
+                    if (thread->current_pcb->ttl > 0) {
+                        thread->current_pcb->ttl--;
+                    }
+                }
+            }
+        }
+    }
+    
     pthread_mutex_unlock(&machine->mutex);
 }
 
@@ -128,9 +142,13 @@ void machine_print_status(Machine* machine)
         for (uint32_t j = 0; j < machine->cpus[i].num_cores; j++) {
             printf("    Core %u: %u hw_threads\n", j, machine->cpus[i].cores[j].num_hw_threads);
             for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
-                printf("      HW Thread %u: PID=%u\n", 
-                    k, 
-                    machine->cpus[i].cores[j].hw_threads[k].current_pid);
+                HWThread* t = &machine->cpus[i].cores[j].hw_threads[k];
+                if (t->current_pcb) {
+                    printf("      HW Thread %u: PID=%u (TTL=%u)\n", 
+                        k, t->current_pcb->pid, t->current_pcb->ttl);
+                } else {
+                    printf("      HW Thread %u: IDLE\n", k);
+                }
             }
         }
     }

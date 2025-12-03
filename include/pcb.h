@@ -12,9 +12,22 @@
 extern "C" {
 #endif
 
+typedef enum {
+    PROCESS_STATE_NEW,
+    PROCESS_STATE_READY,
+    PROCESS_STATE_RUNNING,
+    PROCESS_STATE_TERMINATED
+} ProcessState;
+
 typedef struct {
     uint32_t pid;          /* Process ID */
     uint32_t ttl;          /* Time To Live del proceso (en ticks) */
+    ProcessState state;    /* Estado actual del proceso */
+    
+    /* Información de ubicación (si está en ejecución) */
+    int cpu_id;
+    int core_id;
+    int hw_thread_id;
 } PCB;
 
 /* Crear un nuevo PCB con un PID dado y tiempo de vida aleatorio */

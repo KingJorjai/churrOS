@@ -16,6 +16,10 @@ PCB* pcb_create(uint32_t pid)
     pcb->pid = pid;
     /* Tiempo de vida aleatorio entre 1 y 100 ticks (por ejemplo) */
     pcb->ttl = (rand() % 100) + 1;
+    pcb->state = PROCESS_STATE_NEW;
+    pcb->cpu_id = -1;
+    pcb->core_id = -1;
+    pcb->hw_thread_id = -1;
     
     return pcb;
 }
