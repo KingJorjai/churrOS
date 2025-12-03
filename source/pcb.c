@@ -24,6 +24,22 @@ PCB* pcb_create(uint32_t pid)
     return pcb;
 }
 
+PCB* pcb_create_idle(void)
+{
+    PCB* pcb = (PCB*)malloc(sizeof(PCB));
+    if (!pcb)
+        return NULL;
+    
+    pcb->pid = 0;
+    pcb->ttl = 0; /* 0 representará infinito para IDLE */
+    pcb->state = PROCESS_STATE_RUNNING;
+    pcb->cpu_id = -1;
+    pcb->core_id = -1;
+    pcb->hw_thread_id = -1;
+    
+    return pcb;
+}
+
 void pcb_destroy(PCB* pcb)
 {
     if (pcb) {

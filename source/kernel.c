@@ -286,6 +286,71 @@ static int kernel_is_running(Kernel* kernel)
     return kernel->running;
 }
 
+static void scheduler_dispatch(HWThread* thread, PCB* pcb, uint32_t cpu, uint32_t core, uint32_t hw_thread)
+{
+    pcb->state = PROCESS_STATE_RUNNING;
+    pcb->cpu_id = cpu;
+    pcb->core_id = core;
+    pcb->hw_thread_id = hw_thread;
+    thread->current_pcb = pcb;
+}
+
+static void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uint32_t core, uint32_t hw_thread)
+{
+    if (!thread->current_pcb) return;
+
+    PCB* current = thread->current_pcb;
+
+    /* Caso 1: Proceso IDLE */
+    if (current->pid == 0) {
+        if (!process_queue_is_empty(kernel->process_queue)) {
+            PCB* next = process_queue_dequeue(kernel->process_queue);
+            if (next) {
+                pcb_destroy(current); /* Destruir IDLE */
+                scheduler_dispatch(thread, next, cpu, core, hw_thread);
+                printf("[Scheduler] Dispatch PID=%u (Reemplazando IDLE) a CPU %u Core %u Thread %u (TTL=%u)\n",
+                       next->pid, cpu, core, hw_thread, next->ttl);
+            }
+        }
+        return;
+    }
+
+    /* Caso 2: Proceso Terminado */
+    if (current->ttl == 0) {
+        printf("[Scheduler] Proceso PID=%u terminado en CPU %u Core %u Thread %u\n",
+               current->pid, cpu, core, hw_thread);
+        current->state = PROCESS_STATE_TERMINATED;
+        pcb_destroy(current);
+
+        if (!process_queue_is_empty(kernel->process_queue)) {
+            PCB* next = process_queue_dequeue(kernel->process_queue);
+            scheduler_dispatch(thread, next, cpu, core, hw_thread);
+            printf("[Scheduler] Dispatch PID=%u a CPU %u Core %u Thread %u (TTL=%u)\n",
+                   next->pid, cpu, core, hw_thread, next->ttl);
+        } else {
+            thread->current_pcb = pcb_create_idle();
+            printf("[Scheduler] CPU %u Core %u Thread %u pasa a IDLE\n", cpu, core, hw_thread);
+        }
+        return;
+    }
+
+    /* Caso 3: Quantum Expirado (Round Robin) */
+    if (!process_queue_is_empty(kernel->process_queue)) {
+        /* Desalojar actual */
+        current->state = PROCESS_STATE_READY;
+        current->cpu_id = -1;
+        current->core_id = -1;
+        current->hw_thread_id = -1;
+        process_queue_enqueue(kernel->process_queue, current);
+
+        /* Despachar siguiente */
+        PCB* next = process_queue_dequeue(kernel->process_queue);
+        scheduler_dispatch(thread, next, cpu, core, hw_thread);
+        printf("[Scheduler] Preemption PID=%u -> Dispatch PID=%u en CPU %u Core %u Thread %u\n",
+               current->pid, next->pid, cpu, core, hw_thread);
+    }
+}
+
 static void* scheduler_thread_func(void* arg)
 {
     Kernel* kernel = (Kernel*)arg;
@@ -311,49 +376,7 @@ static void* scheduler_thread_func(void* arg)
             for (uint32_t j = 0; j < m->cpus[i].num_cores; j++) {
                 for (uint32_t k = 0; k < m->cpus[i].cores[j].num_hw_threads; k++) {
                     HWThread* thread = &m->cpus[i].cores[j].hw_threads[k];
-                    
-                    /* 1. Verificar procesos terminados o expiración de quantum (Round Robin) */
-                    if (thread->current_pcb) {
-                        PCB* pcb = thread->current_pcb;
-                        
-                        if (pcb->ttl == 0) {
-                            /* Proceso terminado */
-                            printf("[Scheduler] Proceso PID=%u terminado en CPU %u Core %u Thread %u\n",
-                                   pcb->pid, i, j, k);
-                            pcb->state = PROCESS_STATE_TERMINATED;
-                            pcb_destroy(pcb);
-                            thread->current_pcb = NULL;
-                        } else {
-                            /* Quantum expirado (Round Robin): desalojar y volver a encolar */
-                            /* Nota: Asumimos que el periodo del timer es el quantum */
-                            pcb->state = PROCESS_STATE_READY;
-                            pcb->cpu_id = -1;
-                            pcb->core_id = -1;
-                            pcb->hw_thread_id = -1;
-                            
-                            /* Desalojar */
-                            thread->current_pcb = NULL;
-                            
-                            /* Volver a encolar */
-                            process_queue_enqueue(kernel->process_queue, pcb);
-                            /* printf("[Scheduler] Preemption PID=%u (TTL=%u)\n", pcb->pid, pcb->ttl); */
-                        }
-                    }
-                    
-                    /* 2. Asignar procesos a hilos libres */
-                    if (!thread->current_pcb && !process_queue_is_empty(kernel->process_queue)) {
-                        PCB* next_pcb = process_queue_dequeue(kernel->process_queue);
-                        if (next_pcb) {
-                            next_pcb->state = PROCESS_STATE_RUNNING;
-                            next_pcb->cpu_id = i;
-                            next_pcb->core_id = j;
-                            next_pcb->hw_thread_id = k;
-                            
-                            thread->current_pcb = next_pcb;
-                            printf("[Scheduler] Dispatch PID=%u a CPU %u Core %u Thread %u (TTL=%u)\n",
-                                   next_pcb->pid, i, j, k, next_pcb->ttl);
-                        }
-                    }
+                    scheduler_update_thread(kernel, thread, i, j, k);
                 }
             }
         }

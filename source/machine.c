@@ -11,7 +11,8 @@ static void init_hw_threads(HWThread* threads, uint32_t count)
 {
     for (uint32_t i = 0; i < count; i++) {
         threads[i].hw_thread_id = i;
-        threads[i].current_pcb = NULL;
+        /* Inicializar con proceso IDLE */
+        threads[i].current_pcb = pcb_create_idle();
     }
 }
 
@@ -31,6 +32,12 @@ static int init_core(Core* core, uint32_t core_id, uint32_t num_threads)
 static void cleanup_cpu(CPU* cpu, uint32_t num_cores)
 {
     for (uint32_t i = 0; i < num_cores; i++) {
+        /* Liberar PCBs (incluyendo IDLEs) antes de liberar el array de hilos */
+        for (uint32_t k = 0; k < cpu->cores[i].num_hw_threads; k++) {
+            if (cpu->cores[i].hw_threads[k].current_pcb) {
+                pcb_destroy(cpu->cores[i].hw_threads[k].current_pcb);
+            }
+        }
         free(cpu->cores[i].hw_threads);
     }
     free(cpu->cores);
@@ -107,7 +114,7 @@ void machine_advance_cycle(Machine* machine)
 {
     if (!machine)
         return;
-    
+        
     pthread_mutex_lock(&machine->mutex);
     
     for (uint32_t i = 0; i < machine->num_cpus; i++) {
@@ -115,8 +122,8 @@ void machine_advance_cycle(Machine* machine)
             for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
                 HWThread* thread = &machine->cpus[i].cores[j].hw_threads[k];
                 if (thread->current_pcb) {
-                    /* Consumir tiempo del proceso */
-                    if (thread->current_pcb->ttl > 0) {
+                    /* Consumir tiempo del proceso SOLO si no es IDLE (PID 0) */
+                    if (thread->current_pcb->pid != 0 && thread->current_pcb->ttl > 0) {
                         thread->current_pcb->ttl--;
                     }
                 }
@@ -144,10 +151,14 @@ void machine_print_status(Machine* machine)
             for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
                 HWThread* t = &machine->cpus[i].cores[j].hw_threads[k];
                 if (t->current_pcb) {
-                    printf("      HW Thread %u: PID=%u (TTL=%u)\n", 
-                        k, t->current_pcb->pid, t->current_pcb->ttl);
+                    if (t->current_pcb->pid == 0) {
+                        printf("      HW Thread %u: IDLE (PID=0)\n", k);
+                    } else {
+                        printf("      HW Thread %u: PID=%u (TTL=%u)\n", 
+                            k, t->current_pcb->pid, t->current_pcb->ttl);
+                    }
                 } else {
-                    printf("      HW Thread %u: IDLE\n", k);
+                    printf("      HW Thread %u: NULL (Error: No Idle PCB)\n", k);
                 }
             }
         }

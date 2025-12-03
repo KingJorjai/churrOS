@@ -33,6 +33,9 @@ typedef struct {
 /* Crear un nuevo PCB con un PID dado y tiempo de vida aleatorio */
 PCB* pcb_create(uint32_t pid);
 
+/* Crear un proceso IDLE (PID=0, TTL infinito) */
+PCB* pcb_create_idle(void);
+
 /* Destruir un PCB y liberar sus recursos */
 void pcb_destroy(PCB* pcb);
 
