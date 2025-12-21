@@ -19,8 +19,9 @@ extern "C" {
 
 /* Algoritmos de scheduling disponibles */
 typedef enum {
-    SCHEDULER_ROUND_ROBIN,  /* Round Robin con quantum fijo */
-    SCHEDULER_FIFO          /* First In First Out (sin preemption por tiempo) */
+    SCHEDULER_ROUND_ROBIN,      /* Round Robin con quantum fijo */
+    SCHEDULER_FIFO,             /* First In First Out (sin preemption por tiempo) */
+    SCHEDULER_CHOCOLATE_CALIENTE /* Quantum adaptativo basado en temperatura */
 } SchedulerAlgorithm;
 
 /* Configuración del sistema */

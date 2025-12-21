@@ -5,6 +5,7 @@
 
 #include "../include/kernel.h"
 #include "../include/pcb.h"
+#include "../include/scheduler.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -127,7 +128,8 @@ int kernel_start(Kernel* kernel)
     printf("  Cores por CPU: %u\n", kernel->config.num_cores_per_cpu);
     printf("  HW Threads por Core: %u\n", kernel->config.num_hw_threads_per_core);
     printf("  Algoritmo de scheduling: %s\n", 
-           kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" : "FIFO");
+           kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" :
+           kernel->config.scheduler_algorithm == SCHEDULER_FIFO ? "FIFO" : "Chocolate Caliente");
     printf("  Periodo del Timer: %u ticks\n", kernel->config.timer_period);
     printf("  Periodo de generación de procesos: %u ticks\n", kernel->config.process_gen_period);
     printf("  Velocidad del reloj: %u ms\n", kernel->config.clock_speed_ms);
@@ -286,75 +288,6 @@ static int kernel_is_running(Kernel* kernel)
         return 0;
 
     return kernel->running;
-}
-
-static void scheduler_dispatch(HWThread* thread, PCB* pcb, uint32_t cpu, uint32_t core, uint32_t hw_thread)
-{
-    pcb->state = PROCESS_STATE_RUNNING;
-    pcb->cpu_id = cpu;
-    pcb->core_id = core;
-    pcb->hw_thread_id = hw_thread;
-    thread->current_pcb = pcb;
-}
-
-static void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uint32_t core, uint32_t hw_thread)
-{
-    if (!thread->current_pcb) return;
-
-    PCB* current = thread->current_pcb;
-
-    /* Caso 1: Proceso IDLE */
-    if (current->pid == 0) {
-        if (!process_queue_is_empty(kernel->process_queue)) {
-            PCB* next = process_queue_dequeue(kernel->process_queue);
-            if (next) {
-                pcb_destroy(current); /* Destruir IDLE */
-                scheduler_dispatch(thread, next, cpu, core, hw_thread);
-                printf("[Scheduler] Dispatch PID=%u (Reemplazando IDLE) a CPU %u Core %u Thread %u (TTL=%u)\n",
-                       next->pid, cpu, core, hw_thread, next->ttl);
-            }
-        }
-        return;
-    }
-
-    /* Caso 2: Proceso Terminado */
-    if (current->ttl == 0) {
-        printf("[Scheduler] Proceso PID=%u terminado en CPU %u Core %u Thread %u\n",
-               current->pid, cpu, core, hw_thread);
-        current->state = PROCESS_STATE_TERMINATED;
-        pcb_destroy(current);
-
-        if (!process_queue_is_empty(kernel->process_queue)) {
-            PCB* next = process_queue_dequeue(kernel->process_queue);
-            scheduler_dispatch(thread, next, cpu, core, hw_thread);
-            printf("[Scheduler] Dispatch PID=%u a CPU %u Core %u Thread %u (TTL=%u)\n",
-                   next->pid, cpu, core, hw_thread, next->ttl);
-        } else {
-            thread->current_pcb = pcb_create_idle();
-            printf("[Scheduler] CPU %u Core %u Thread %u pasa a IDLE\n", cpu, core, hw_thread);
-        }
-        return;
-    }
-
-    /* Caso 3: Depende del algoritmo de scheduling */
-    if (kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN) {
-        /* Round Robin: Preempción por quantum */
-        if (!process_queue_is_empty(kernel->process_queue)) {
-            /* Desalojar actual */
-            current->state = PROCESS_STATE_READY;
-            current->cpu_id = -1;
-            current->core_id = -1;
-            current->hw_thread_id = -1;
-            process_queue_enqueue(kernel->process_queue, current);
-
-            /* Despachar siguiente */
-            PCB* next = process_queue_dequeue(kernel->process_queue);
-            scheduler_dispatch(thread, next, cpu, core, hw_thread);
-            printf("[Scheduler] Preemption PID=%u -> Dispatch PID=%u en CPU %u Core %u Thread %u\n",
-                   current->pid, next->pid, cpu, core, hw_thread);
-        }
-    }
-    /* FIFO: No hay preemption por tiempo, el proceso continúa ejecutando */
 }
 
 static void* scheduler_thread_func(void* arg)

@@ -19,7 +19,10 @@ void print_usage(const char* program_name)
     printf("  -c NUM     Número de CPUs (default: 1)\n");
     printf("  -o NUM     Número de cores por CPU (default: 2)\n");
     printf("  -t NUM     Número de HW threads por core (default: 2)\n");
-    printf("  -a ALG     Algoritmo de scheduling: rr=Round Robin, fifo=FIFO (default: rr)\n");
+    printf("  -a ALG     Algoritmo de scheduling (default: rr)\n");
+    printf("             rr   = Round Robin\n");
+    printf("             fifo = FIFO\n");
+    printf("             ch   = Chocolate Caliente (quantum adaptativo)\n");
     printf("  -p NUM     Periodo del timer en ticks (default: 5)\n");
     printf("  -g NUM     Periodo de generación de procesos en ticks (default: 10)\n");
     printf("  -s NUM     Velocidad del reloj en ms (default: 100)\n");
@@ -28,6 +31,7 @@ void print_usage(const char* program_name)
     printf("\nEjemplos:\n");
     printf("  %s -c 2 -o 4 -t 2 -p 5 -g 15 -s 50 -d 200\n", program_name);
     printf("  %s -a fifo -p 10 -g 20 -d 150\n", program_name);
+    printf("  %s -a ch -p 3 -g 8 -s 30 -d 100  # ¡Chocolate Caliente!\n", program_name);
 }
 
 static int parse_positive_arg(const char* optarg, const char* name)
@@ -66,8 +70,10 @@ int main(int argc, char* argv[])
                     config.scheduler_algorithm = SCHEDULER_ROUND_ROBIN;
                 } else if (strcmp(optarg, "fifo") == 0) {
                     config.scheduler_algorithm = SCHEDULER_FIFO;
+                } else if (strcmp(optarg, "ch") == 0) {
+                    config.scheduler_algorithm = SCHEDULER_CHOCOLATE_CALIENTE;
                 } else {
-                    fprintf(stderr, "Error: Algoritmo no reconocido '%s'. Use 'rr' o 'fifo'\n", optarg);
+                    fprintf(stderr, "Error: Algoritmo '%s' no reconocido. Use 'rr', 'fifo' o 'ch'\n", optarg);
                     return 1;
                 }
                 break;

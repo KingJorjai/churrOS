@@ -16,6 +16,7 @@ KERNEL_SOURCES := $(SRC_DIR)/clock.c \
                   $(SRC_DIR)/process_queue.c \
                   $(SRC_DIR)/machine.c \
 				  $(SRC_DIR)/logging.c \
+				  $(SRC_DIR)/scheduler.c \
                   $(SRC_DIR)/kernel.c \
                   $(SRC_DIR)/main.c
 

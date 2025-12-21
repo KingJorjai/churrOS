@@ -28,6 +28,10 @@ typedef struct {
     int cpu_id;
     int core_id;
     int hw_thread_id;
+    
+    /* Información para Chocolate Caliente */
+    uint32_t temperature;        /* Temperatura actual (0-100) */
+    uint32_t ticks_since_swap;   /* Ticks ejecutando desde último swap */
 } PCB;
 
 /* Crear un nuevo PCB con un PID dado y tiempo de vida aleatorio */

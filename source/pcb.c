@@ -21,6 +21,10 @@ PCB* pcb_create(uint32_t pid)
     pcb->core_id = -1;
     pcb->hw_thread_id = -1;
     
+    /* Inicializar temperatura en frío */
+    pcb->temperature = 0;
+    pcb->ticks_since_swap = 0;
+    
     return pcb;
 }
 
@@ -36,6 +40,10 @@ PCB* pcb_create_idle(void)
     pcb->cpu_id = -1;
     pcb->core_id = -1;
     pcb->hw_thread_id = -1;
+    
+    /* IDLE siempre está frío */
+    pcb->temperature = 0;
+    pcb->ticks_since_swap = 0;
     
     return pcb;
 }

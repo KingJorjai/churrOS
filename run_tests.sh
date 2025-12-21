@@ -244,6 +244,49 @@ run_test \
     "MUST_HAVE:Round Robin:Usa Round Robin|COUNT_MIN:Dispatch:Múltiples dispatches en sistema multicore:10|MUST_HAVE:terminado:Procesos deben finalizar correctamente"
 
 # ==========================================
+# SECCIÓN 5: Tests de Chocolate Caliente
+# ==========================================
+echo -e "${CYAN}========================================${NC}"
+echo -e "${CYAN}  SECCIÓN 5: Chocolate Caliente${NC}"
+echo -e "${CYAN}========================================${NC}"
+separator
+
+# Test 5.1: Verificación Básica de Chocolate Caliente
+run_test \
+    "Test 5.1: Chocolate Caliente - Verificación Básica" \
+    "Algoritmo debe mostrar temperatura y quantum adaptativo" \
+    "./build/churros -a ch -c 1 -o 1 -t 1 -p 2 -g 5 -s 100 -d 40" \
+    "MUST_HAVE:Chocolate Caliente:Confirma que usa Chocolate Caliente|COUNT_MIN:Temp=.*°C:Debe mostrar temperatura de procesos:5|COUNT_MIN:Quantum=:Debe calcular quantum adaptativo:5|MUST_HAVE:Scheduler:Scheduler debe ejecutarse"
+
+# Test 5.2: Adaptación de Quantum por Temperatura
+run_test \
+    "Test 5.2: Chocolate Caliente - Quantum Adaptativo" \
+    "Quantum debe reducirse cuando el proceso se calienta" \
+    "./build/churros -a ch -c 1 -o 1 -t 1 -p 2 -g 5 -s 80 -d 50" \
+    "MUST_HAVE:Chocolate Caliente:Usa Chocolate Caliente|COUNT_MIN:Context switch.*enfriándose:Debe haber context switches cuando quantum se agota:2|MUST_HAVE:°C:Debe mostrar temperatura|MUST_HAVE:Dispatch:Debe despachar procesos"
+
+# Test 5.3: Calentamiento y Enfriamiento de Procesos
+run_test \
+    "Test 5.3: Chocolate Caliente - Dinámica de Temperatura" \
+    "Procesos se calientan ejecutando y enfrían esperando" \
+    "./build/churros -a ch -c 1 -o 1 -t 1 -p 2 -g 3 -s 60 -d 60" \
+    "MUST_HAVE:Chocolate Caliente:Usa Chocolate Caliente|MUST_HAVE:Temp=:Temperatura debe incrementarse|COUNT_MIN:Context switch:Debe haber cambios de contexto:3|MUST_HAVE:Scheduler:Scheduler activo"
+
+# Test 5.4: Visualización de Emojis de Temperatura
+run_test \
+    "Test 5.4: Chocolate Caliente - Indicadores Visuales" \
+    "Debe mostrar emojis según rangos de temperatura" \
+    "./build/churros -a ch -c 1 -o 1 -t 1 -p 2 -g 4 -s 70 -d 70" \
+    "MUST_HAVE:Chocolate Caliente:Usa Chocolate Caliente|MUST_HAVE:°C:Debe mostrar temperatura|COUNT_MIN:Temp=:Debe haber lecturas de temperatura:8|MUST_HAVE:Dispatch:Debe despachar procesos"
+
+# Test 5.5: Comparativa - Chocolate Caliente vs Round Robin
+run_test \
+    "Test 5.5: Chocolate Caliente - Comportamiento Diferenciado" \
+    "Chocolate Caliente debe comportarse diferente a RR estándar" \
+    "./build/churros -a ch -c 1 -o 2 -t 1 -p 2 -g 3 -s 50 -d 60" \
+    "MUST_HAVE:Chocolate Caliente:Usa Chocolate Caliente|MUST_NOT_HAVE:Round Robin:NO debe usar Round Robin|MUST_HAVE:Temp=.*Quantum=:Debe mostrar temp y quantum juntos|COUNT_MIN:Dispatch:Múltiples dispatches:4"
+
+# ==========================================
 # RESUMEN FINAL
 # ==========================================
 echo -e "${CYAN}========================================${NC}"
@@ -277,6 +320,7 @@ if [ ${TESTS_FAILED} -eq 0 ]; then
     echo -e "${GREEN}Los algoritmos de scheduling funcionan correctamente:${NC}"
     echo "  ✓ Round Robin: Preemption por quantum verificada"
     echo "  ✓ FIFO: Ejecución sin interrupciones verificada"
+    echo "  ✓ Chocolate Caliente: Quantum adaptativo por temperatura verificado"
     echo "  ✓ Comportamiento diferencial confirmado"
 else
     echo -e "${RED}${BOLD}╔════════════════════════════════════════╗${NC}"
@@ -289,8 +333,9 @@ fi
 echo ""
 echo -e "${CYAN}Comandos útiles:${NC}"
 echo "  Ejecutar test individual:"
-echo "    ./build/churros -a rr  -c 1 -o 1 -t 1 -p 5 -g 10 -s 50 -d 100"
+echo "    ./build/churros -a rr   -c 1 -o 1 -t 1 -p 5 -g 10 -s 50 -d 100"
 echo "    ./build/churros -a fifo -c 1 -o 1 -t 1 -p 5 -g 10 -s 50 -d 100"
+echo "    ./build/churros -a ch   -c 1 -o 1 -t 1 -p 2 -g 5  -s 80 -d 50"
 echo ""
 echo "  Ver ayuda completa:"
 echo "    ./build/churros -h"
