@@ -126,6 +126,8 @@ int kernel_start(Kernel* kernel)
     printf("  CPUs: %u\n", kernel->config.num_cpus);
     printf("  Cores por CPU: %u\n", kernel->config.num_cores_per_cpu);
     printf("  HW Threads por Core: %u\n", kernel->config.num_hw_threads_per_core);
+    printf("  Algoritmo de scheduling: %s\n", 
+           kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" : "FIFO");
     printf("  Periodo del Timer: %u ticks\n", kernel->config.timer_period);
     printf("  Periodo de generación de procesos: %u ticks\n", kernel->config.process_gen_period);
     printf("  Velocidad del reloj: %u ms\n", kernel->config.clock_speed_ms);
@@ -334,21 +336,25 @@ static void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t c
         return;
     }
 
-    /* Caso 3: Quantum Expirado (Round Robin) */
-    if (!process_queue_is_empty(kernel->process_queue)) {
-        /* Desalojar actual */
-        current->state = PROCESS_STATE_READY;
-        current->cpu_id = -1;
-        current->core_id = -1;
-        current->hw_thread_id = -1;
-        process_queue_enqueue(kernel->process_queue, current);
+    /* Caso 3: Depende del algoritmo de scheduling */
+    if (kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN) {
+        /* Round Robin: Preempción por quantum */
+        if (!process_queue_is_empty(kernel->process_queue)) {
+            /* Desalojar actual */
+            current->state = PROCESS_STATE_READY;
+            current->cpu_id = -1;
+            current->core_id = -1;
+            current->hw_thread_id = -1;
+            process_queue_enqueue(kernel->process_queue, current);
 
-        /* Despachar siguiente */
-        PCB* next = process_queue_dequeue(kernel->process_queue);
-        scheduler_dispatch(thread, next, cpu, core, hw_thread);
-        printf("[Scheduler] Preemption PID=%u -> Dispatch PID=%u en CPU %u Core %u Thread %u\n",
-               current->pid, next->pid, cpu, core, hw_thread);
+            /* Despachar siguiente */
+            PCB* next = process_queue_dequeue(kernel->process_queue);
+            scheduler_dispatch(thread, next, cpu, core, hw_thread);
+            printf("[Scheduler] Preemption PID=%u -> Dispatch PID=%u en CPU %u Core %u Thread %u\n",
+                   current->pid, next->pid, cpu, core, hw_thread);
+        }
     }
+    /* FIFO: No hay preemption por tiempo, el proceso continúa ejecutando */
 }
 
 static void* scheduler_thread_func(void* arg)

@@ -17,6 +17,12 @@
 extern "C" {
 #endif
 
+/* Algoritmos de scheduling disponibles */
+typedef enum {
+    SCHEDULER_ROUND_ROBIN,  /* Round Robin con quantum fijo */
+    SCHEDULER_FIFO          /* First In First Out (sin preemption por tiempo) */
+} SchedulerAlgorithm;
+
 /* Configuración del sistema */
 typedef struct {
     uint32_t num_cpus;
@@ -26,6 +32,7 @@ typedef struct {
     uint32_t process_gen_period;     /* Periodo de generación de procesos en ticks */
     uint32_t clock_speed_ms;         /* Velocidad del reloj en milisegundos */
     uint32_t simulation_duration;    /* Duración de la simulación en ticks (0 = infinito) */
+    SchedulerAlgorithm scheduler_algorithm;  /* Algoritmo de scheduling a usar */
 } KernelConfig;
 
 /* Estado del kernel */
