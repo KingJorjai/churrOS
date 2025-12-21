@@ -56,3 +56,6 @@ dkms.conf
 
 # Exlude build directory
 /build/
+
+# Exlude log files
+*.log
