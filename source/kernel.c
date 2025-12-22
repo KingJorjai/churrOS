@@ -20,7 +20,6 @@ static int kernel_is_running(Kernel* kernel);
 
 /* Prototipos de funciones de los hilos */
 static void* clock_thread_func(void* arg);
-static void* sched_timer_thread_func(void* arg);
 static void* procgen_timer_thread_func(void* arg);
 static void* scheduler_thread_func(void* arg);
 static void* process_generator_thread_func(void* arg);
@@ -58,12 +57,9 @@ Kernel* kernel_create(KernelConfig* config)
     }
     process_queue_init(kernel->process_queue);
     
-    /* Crear timers separados: uno para el scheduler y otro para el generador de procesos */
-    kernel->sched_timer = churros_timer_create(config->timer_period);
+    /* Crear timer para el generador de procesos */
     kernel->procgen_timer = churros_timer_create(config->process_gen_period);
-    if (!kernel->sched_timer || !kernel->procgen_timer) {
-        if (kernel->sched_timer) churros_timer_destroy(kernel->sched_timer);
-        if (kernel->procgen_timer) churros_timer_destroy(kernel->procgen_timer);
+    if (!kernel->procgen_timer) {
         process_queue_destroy(kernel->process_queue);
         free(kernel->process_queue);
         machine_destroy(kernel->machine);
@@ -77,6 +73,9 @@ Kernel* kernel_create(KernelConfig* config)
     /* Inicializar mutexes y estado */
     pthread_mutex_init(&kernel->running_mutex, NULL);
     pthread_mutex_init(&kernel->pid_mutex, NULL);
+    pthread_mutex_init(&kernel->scheduler_mutex, NULL);
+    pthread_cond_init(&kernel->scheduler_cond, NULL);
+    kernel->pending_events = SCHED_EVENT_NONE;
     kernel->running = 0;
     kernel->next_pid = 1;
     
@@ -94,16 +93,17 @@ void kernel_destroy(Kernel* kernel)
     kernel_stop(kernel);
     
     /* Destruir componentes */
-    churros_timer_destroy(kernel->sched_timer);
     churros_timer_destroy(kernel->procgen_timer);
     process_queue_destroy(kernel->process_queue);
     free(kernel->process_queue);
     machine_destroy(kernel->machine);
     clock_destroy();
     
-    /* Destruir mutexes */
+    /* Destruir mutexes y condition variables */
     pthread_mutex_destroy(&kernel->running_mutex);
     pthread_mutex_destroy(&kernel->pid_mutex);
+    pthread_mutex_destroy(&kernel->scheduler_mutex);
+    pthread_cond_destroy(&kernel->scheduler_cond);
     
     g_kernel = NULL;
     free(kernel);
@@ -130,7 +130,12 @@ int kernel_start(Kernel* kernel)
     printf("  Algoritmo de scheduling: %s\n", 
            kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" :
            kernel->config.scheduler_algorithm == SCHEDULER_FIFO ? "FIFO" : "Chocolate Caliente");
-    printf("  Periodo del Timer: %u ticks\n", kernel->config.timer_period);
+    if (kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN) {
+        printf("  Quantum (Round Robin): %u ticks\n", kernel->config.rr_quantum);
+    } else if (kernel->config.scheduler_algorithm == SCHEDULER_CHOCOLATE_CALIENTE) {
+        printf("  Quantum base (Chocolate Caliente): %u ticks\n", kernel->config.rr_quantum);
+        printf("  → Quantum adaptativo según temperatura\n");
+    }
     printf("  Periodo de generación de procesos: %u ticks\n", kernel->config.process_gen_period);
     printf("  Velocidad del reloj: %u ms\n", kernel->config.clock_speed_ms);
     if (kernel->config.simulation_duration > 0)
@@ -152,13 +157,7 @@ int kernel_start(Kernel* kernel)
         return -1;
     }
     
-    /* Crear hilos monitor de timers (imprimen eventos sin consumir la interrupción) */
-    if (pthread_create(&kernel->sched_timer_thread, NULL, sched_timer_thread_func, kernel) != 0) {
-        fprintf(stderr, "Error al crear el hilo Timer (scheduler)\n");
-        kernel->running = 0;
-        return -1;
-    }
-
+    /* Crear hilo monitor del timer del generador de procesos */
     if (pthread_create(&kernel->procgen_timer_thread, NULL, procgen_timer_thread_func, kernel) != 0) {
         fprintf(stderr, "Error al crear el hilo Timer (procgen)\n");
         kernel->running = 0;
@@ -189,18 +188,18 @@ void kernel_stop(Kernel* kernel)
 
     printf("\n=== Deteniendo Kernel ===\n");
 
-    churros_timer_wake(kernel->sched_timer);
     churros_timer_wake(kernel->procgen_timer);
+    
+    /* Despertar al scheduler para que pueda terminar */
+    pthread_cond_broadcast(&kernel->scheduler_cond);
 
     /* Opcional: forzar cancelación de hilos potencialmente bloqueados */
     pthread_cancel(kernel->clock_thread);
-    pthread_cancel(kernel->sched_timer_thread);
     pthread_cancel(kernel->procgen_timer_thread);
     pthread_cancel(kernel->scheduler_thread);
     pthread_cancel(kernel->process_gen_thread);
 
     pthread_join(kernel->clock_thread, NULL);
-    pthread_join(kernel->sched_timer_thread, NULL);
     pthread_join(kernel->procgen_timer_thread, NULL);
     pthread_join(kernel->scheduler_thread, NULL);
     pthread_join(kernel->process_gen_thread, NULL);
@@ -220,6 +219,17 @@ uint32_t kernel_get_next_pid(Kernel* kernel)
     return pid;
 }
 
+void kernel_signal_scheduler(Kernel* kernel, SchedulerEventFlags event)
+{
+    if (!kernel)
+        return;
+    
+    pthread_mutex_lock(&kernel->scheduler_mutex);
+    kernel->pending_events |= event; /* Agregar evento a los pendientes */
+    pthread_cond_signal(&kernel->scheduler_cond); /* Despertar al scheduler */
+    pthread_mutex_unlock(&kernel->scheduler_mutex);
+}
+
 /* Implementación de los hilos */
 
 static void* clock_thread_func(void* arg)
@@ -236,8 +246,7 @@ static void* clock_thread_func(void* arg)
         tick_count++;
         LOG_TICK("Clock", tick_count);
         
-        machine_advance_cycle(kernel->machine);
-        churros_timer_tick(kernel->sched_timer);
+        machine_advance_cycle(kernel->machine, kernel);
         churros_timer_tick(kernel->procgen_timer);
         
         if (kernel->config.simulation_duration > 0 && 
@@ -272,11 +281,6 @@ static void* timer_monitor_thread(void* arg, Timer* timer, const char* name, int
     return NULL;
 }
 
-static void* sched_timer_thread_func(void* arg)
-{
-    return timer_monitor_thread(arg, ((Kernel*)arg)->sched_timer, "Scheduler", 1);
-}
-
 static void* procgen_timer_thread_func(void* arg)
 {
     return timer_monitor_thread(arg, ((Kernel*)arg)->procgen_timer, "ProcessGenerator", 0);
@@ -295,15 +299,23 @@ static void* scheduler_thread_func(void* arg)
     Kernel* kernel = (Kernel*)arg;
     uint32_t activation_count = 0;
     
-    printf("[Scheduler] Iniciado (periodo: %u ticks, %llu ms)\n",
-        kernel->config.timer_period,
-        (unsigned long long)kernel->config.timer_period * kernel->config.clock_speed_ms);
+    printf("[Scheduler] Iniciado (event-driven)\n");
     
     while (kernel_is_running(kernel)) {
-        churros_timer_wait_interrupt(kernel->sched_timer);
+        /* Esperar a que haya eventos pendientes */
+        pthread_mutex_lock(&kernel->scheduler_mutex);
+        while (kernel->pending_events == SCHED_EVENT_NONE && kernel_is_running(kernel)) {
+            pthread_cond_wait(&kernel->scheduler_cond, &kernel->scheduler_mutex);
+        }
         
-        if (!kernel_is_running(kernel))
+        if (!kernel_is_running(kernel)) {
+            pthread_mutex_unlock(&kernel->scheduler_mutex);
             break;
+        }
+        
+        /* Copiar eventos pendientes y limpiar */
+        kernel->pending_events = SCHED_EVENT_NONE;
+        pthread_mutex_unlock(&kernel->scheduler_mutex);
         
         activation_count++;
         
@@ -321,14 +333,6 @@ static void* scheduler_thread_func(void* arg)
         }
         
         pthread_mutex_unlock(&kernel->machine->mutex);
-        
-        /* Debug info */
-        /*
-        uint32_t queue_size = process_queue_size(kernel->process_queue);
-        if (queue_size > 0) {
-            printf("[Scheduler] Procesos en cola: %u\n", queue_size);
-        }
-        */
     }
     
     printf("[Scheduler] Terminado (activaciones totales: %u)\n", activation_count);
@@ -357,6 +361,9 @@ static void* process_generator_thread_func(void* arg)
             process_queue_enqueue(kernel->process_queue, pcb);
             printf("[ProcessGenerator] Nuevo proceso creado: PID=%u, TTL=%u\n", 
                    pcb->pid, pcb->ttl);
+            
+            /* Señalizar al scheduler que hay un nuevo proceso */
+            kernel_signal_scheduler(kernel, SCHED_EVENT_PROCESS_CREATED);
         } else {
             fprintf(stderr, "[ProcessGenerator] Error al crear el proceso\n");
         }

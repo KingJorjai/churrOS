@@ -4,6 +4,7 @@
  */
 
 #include "../include/machine.h"
+#include "../include/kernel.h"
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -110,28 +111,81 @@ void machine_destroy(Machine* machine)
     free(machine);
 }
 
-void machine_advance_cycle(Machine* machine)
+void machine_advance_cycle(Machine* machine, Kernel* kernel)
 {
-    if (!machine)
+    if (!machine || !kernel)
         return;
         
     pthread_mutex_lock(&machine->mutex);
+    
+    int quantum_expired_detected = 0;
+    int process_terminated_detected = 0;
     
     for (uint32_t i = 0; i < machine->num_cpus; i++) {
         for (uint32_t j = 0; j < machine->cpus[i].num_cores; j++) {
             for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
                 HWThread* thread = &machine->cpus[i].cores[j].hw_threads[k];
-                if (thread->current_pcb) {
-                    /* Consumir tiempo del proceso SOLO si no es IDLE (PID 0) */
-                    if (thread->current_pcb->pid != 0 && thread->current_pcb->ttl > 0) {
-                        thread->current_pcb->ttl--;
+                if (!thread->current_pcb)
+                    continue;
+                
+                PCB* pcb = thread->current_pcb;
+                
+                /* Solo procesar procesos reales (no IDLE) */
+                if (pcb->pid == 0)
+                    continue;
+                
+                /* 1. Decrementar TTL */
+                if (pcb->ttl > 0) {
+                    pcb->ttl--;
+                    
+                    /* Detectar terminación */
+                    if (pcb->ttl == 0) {
+                        process_terminated_detected = 1;
                     }
                 }
+                
+                /* 2. Incrementar tiempo de ejecución desde último swap */
+                pcb->ticks_since_swap++;
+                
+                /* 3. Gestionar temperatura y quantum según el algoritmo */
+                if (kernel->config.scheduler_algorithm == SCHEDULER_CHOCOLATE_CALIENTE) {
+                    /* Actualizar temperatura cada tick */
+                    pcb->temperature += 8;
+                    if (pcb->temperature > 100)
+                        pcb->temperature = 100;
+                    
+                    /* Calcular quantum adaptativo basado en temperatura */
+                    uint32_t max_quantum;
+                    if (pcb->temperature >= 80) max_quantum = 1;
+                    else if (pcb->temperature >= 60) max_quantum = 2;
+                    else if (pcb->temperature >= 40) max_quantum = 4;
+                    else if (pcb->temperature >= 20) max_quantum = 6;
+                    else max_quantum = 10;
+                    
+                    /* Detectar expiración de quantum adaptativo */
+                    if (pcb->ticks_since_swap >= max_quantum) {
+                        quantum_expired_detected = 1;
+                    }
+                } else if (kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN) {
+                    /* Detectar expiración de quantum fijo */
+                    if (pcb->ticks_since_swap >= kernel->config.rr_quantum) {
+                        quantum_expired_detected = 1;
+                    }
+                }
+                /* FIFO: No hay gestión de quantum */
             }
         }
     }
     
     pthread_mutex_unlock(&machine->mutex);
+    
+    /* Señalizar eventos detectados al scheduler */
+    if (process_terminated_detected) {
+        kernel_signal_scheduler(kernel, SCHED_EVENT_PROCESS_TERMINATED);
+    }
+    if (quantum_expired_detected) {
+        kernel_signal_scheduler(kernel, SCHED_EVENT_QUANTUM_EXPIRED);
+    }
 }
 
 void machine_print_status(Machine* machine)

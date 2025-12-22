@@ -15,6 +15,9 @@
 extern "C" {
 #endif
 
+/* Forward declaration para evitar dependencias circulares */
+typedef struct Kernel Kernel;
+
 /* Hardware thread (hilo hardware) */
 typedef struct {
     uint32_t hw_thread_id;
@@ -48,8 +51,8 @@ Machine* machine_create(uint32_t num_cpus, uint32_t num_cores_per_cpu, uint32_t 
 /* Destruir la máquina y liberar recursos */
 void machine_destroy(Machine* machine);
 
-/* Avanzar un ciclo en toda la máquina (llamado por el Clock) */
-void machine_advance_cycle(Machine* machine);
+/* Avanzar un ciclo de reloj (decrementar TTL, gestionar quantum, detectar eventos) */
+void machine_advance_cycle(Machine* machine, Kernel* kernel);
 
 /* Imprimir el estado de la máquina */
 void machine_print_status(Machine* machine);

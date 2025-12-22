@@ -20,18 +20,20 @@ void print_usage(const char* program_name)
     printf("  -o NUM     Número de cores por CPU (default: 2)\n");
     printf("  -t NUM     Número de HW threads por core (default: 2)\n");
     printf("  -a ALG     Algoritmo de scheduling (default: rr)\n");
-    printf("             rr   = Round Robin\n");
-    printf("             fifo = FIFO\n");
+    printf("             rr   = Round Robin (con quantum fijo)\n");
+    printf("             fifo = FIFO (sin quantum, ejecuta hasta terminar)\n");
     printf("             ch   = Chocolate Caliente (quantum adaptativo)\n");
-    printf("  -p NUM     Periodo del timer en ticks (default: 5)\n");
+    printf("  -q NUM     Quantum en ticks (default: 5)\n");
+    printf("             - RR: quantum fijo\n");
+    printf("             - CH: quantum base para cálculo adaptativo\n");
     printf("  -g NUM     Periodo de generación de procesos en ticks (default: 10)\n");
     printf("  -s NUM     Velocidad del reloj en ms (default: 100)\n");
     printf("  -d NUM     Duración de la simulación en ticks (0=infinito, default: 100)\n");
     printf("  -h         Mostrar esta ayuda\n");
     printf("\nEjemplos:\n");
-    printf("  %s -c 2 -o 4 -t 2 -p 5 -g 15 -s 50 -d 200\n", program_name);
-    printf("  %s -a fifo -p 10 -g 20 -d 150\n", program_name);
-    printf("  %s -a ch -p 3 -g 8 -s 30 -d 100  # ¡Chocolate Caliente!\n", program_name);
+    printf("  %s -a rr -c 2 -o 4 -t 2 -q 5 -g 15 -s 50 -d 200\n", program_name);
+    printf("  %s -a fifo -g 20 -d 150\n", program_name);
+    printf("  %s -a ch -g 8 -s 30 -d 100  # ¡Chocolate Caliente!\n", program_name);
 }
 
 static int parse_positive_arg(const char* optarg, const char* name)
@@ -53,14 +55,14 @@ int main(int argc, char* argv[])
         .num_cores_per_cpu = 2,
         .num_hw_threads_per_core = 2,
         .scheduler_algorithm = SCHEDULER_ROUND_ROBIN,
-        .timer_period = 5,
+        .rr_quantum = 5,
         .process_gen_period = 10,
         .clock_speed_ms = 100,
         .simulation_duration = 100
     };
     
     int opt;
-    while ((opt = getopt(argc, argv, "c:o:t:a:p:g:s:d:h")) != -1) {
+    while ((opt = getopt(argc, argv, "c:o:t:a:q:p:g:s:d:h")) != -1) {
         switch (opt) {
             case 'c': config.num_cpus = parse_positive_arg(optarg, "El número de CPUs"); break;
             case 'o': config.num_cores_per_cpu = parse_positive_arg(optarg, "El número de cores"); break;
@@ -77,7 +79,8 @@ int main(int argc, char* argv[])
                     return 1;
                 }
                 break;
-            case 'p': config.timer_period = parse_positive_arg(optarg, "El periodo del timer"); break;
+            case 'q': config.rr_quantum = parse_positive_arg(optarg, "El quantum"); break;
+            case 'p': config.rr_quantum = parse_positive_arg(optarg, "El quantum"); break; /* Compatibilidad con -p */
             case 'g': config.process_gen_period = parse_positive_arg(optarg, "El periodo de generación"); break;
             case 's': config.clock_speed_ms = parse_positive_arg(optarg, "La velocidad del reloj"); break;
             case 'd': config.simulation_duration = atoi(optarg); break;
