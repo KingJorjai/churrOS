@@ -19,6 +19,15 @@ typedef enum {
     PROCESS_STATE_TERMINATED
 } ProcessState;
 
+/* Memory management information */
+typedef struct {
+    uint32_t code_start;    /* Virtual address of code segment start */
+    uint32_t data_start;    /* Virtual address of data segment start */
+    uint32_t pgb;           /* Physical address of page table (Page Table Base) */
+    uint32_t code_size;     /* Size of code segment in bytes */
+    uint32_t data_size;     /* Size of data segment in bytes */
+} ProcessMemoryMap;
+
 typedef struct {
     uint32_t pid;          /* Process ID */
     uint32_t ttl;          /* Time To Live del proceso (en ticks) */
@@ -32,6 +41,10 @@ typedef struct {
     /* Información para Chocolate Caliente */
     uint32_t temperature;        /* Temperatura actual (0-100) */
     uint32_t ticks_since_swap;   /* Ticks ejecutando desde último swap */
+    
+    /* Gestión de memoria (Parte 3) */
+    ProcessMemoryMap mm;         /* Memory map and page table info */
+    int is_loaded;               /* Flag: 1 if program loaded, 0 otherwise */
 } PCB;
 
 /* Crear un nuevo PCB con un PID dado y tiempo de vida aleatorio */

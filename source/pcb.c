@@ -25,6 +25,14 @@ PCB* pcb_create(uint32_t pid)
     pcb->temperature = 0;
     pcb->ticks_since_swap = 0;
     
+    /* Initialize memory management fields */
+    pcb->mm.code_start = 0;
+    pcb->mm.data_start = 0;
+    pcb->mm.pgb = 0;
+    pcb->mm.code_size = 0;
+    pcb->mm.data_size = 0;
+    pcb->is_loaded = 0;
+    
     return pcb;
 }
 
@@ -44,6 +52,14 @@ PCB* pcb_create_idle(void)
     /* IDLE siempre está frío */
     pcb->temperature = 0;
     pcb->ticks_since_swap = 0;
+    
+    /* IDLE doesn't have memory */
+    pcb->mm.code_start = 0;
+    pcb->mm.data_start = 0;
+    pcb->mm.pgb = 0;
+    pcb->mm.code_size = 0;
+    pcb->mm.data_size = 0;
+    pcb->is_loaded = 0;
     
     return pcb;
 }
