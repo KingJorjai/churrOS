@@ -1,6 +1,8 @@
 #include "scheduler.h"
 #include "process_queue.h"
 #include "pcb.h"
+#include "memory.h"
+#include "logging.h"
 #include <stdio.h>
 
 /* ============================================
@@ -59,6 +61,12 @@ static void scheduler_dispatch(HWThread* thread, PCB* pcb, uint32_t cpu, uint32_
     pcb->hw_thread_id = hw_thread;
     pcb->ticks_since_swap = 0; /* Reiniciar contador */
     thread->current_pcb = pcb;
+    
+    /* Configure MMU for this process if it has a program loaded */
+    if (pcb->is_loaded && thread->mmu) {
+        mmu_set_ptbr(thread->mmu, pcb->mm.pgb);
+        thread->mmu->pc = pcb->mm.code_start;
+    }
 }
 
 void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uint32_t core, uint32_t hw_thread)
@@ -74,28 +82,31 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
             if (next) {
                 pcb_destroy(current); /* Destruir IDLE */
                 scheduler_dispatch(thread, next, cpu, core, hw_thread);
-                printf("[Scheduler] Dispatch PID=%u (Reemplazando IDLE) a CPU %u Core %u Thread %u (TTL=%u)\n",
-                       next->pid, cpu, core, hw_thread, next->ttl);
+                LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
+                       "Dispatch PID=%u (Reemplazando IDLE) TTL=%u",
+                       next->pid, next->ttl);
             }
         }
         return;
     }
 
     /* Caso 2: Proceso Terminado */
-    if (current->ttl == 0) {
-        printf("[Scheduler] Proceso PID=%u terminado en CPU %u Core %u Thread %u\n",
-               current->pid, cpu, core, hw_thread);
+    /* For loaded programs, termination is signaled by PROCESS_STATE_TERMINATED */
+    /* For random processes, termination occurs when TTL reaches 0 */
+    if (current->state == PROCESS_STATE_TERMINATED || (!current->is_loaded && current->ttl == 0)) {
+        LOG_AT_NOTICE(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
+               "Proceso PID=%u terminado", current->pid);
         current->state = PROCESS_STATE_TERMINATED;
         pcb_destroy(current);
 
         if (!process_queue_is_empty(kernel->process_queue)) {
             PCB* next = process_queue_dequeue(kernel->process_queue);
             scheduler_dispatch(thread, next, cpu, core, hw_thread);
-            printf("[Scheduler] Dispatch PID=%u a CPU %u Core %u Thread %u (TTL=%u)\n",
-                   next->pid, cpu, core, hw_thread, next->ttl);
+            LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
+                   "Dispatch PID=%u TTL=%u", next->pid, next->ttl);
         } else {
             thread->current_pcb = pcb_create_idle();
-            printf("[Scheduler] CPU %u Core %u Thread %u pasa a IDLE\n", cpu, core, hw_thread);
+            LOG_AT_DEBUG(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread, "Pasa a IDLE");
         }
         return;
     }
@@ -115,15 +126,16 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
                 /* Despachar siguiente */
                 PCB* next = process_queue_dequeue(kernel->process_queue);
                 scheduler_dispatch(thread, next, cpu, core, hw_thread);
-                printf("[Scheduler] Preemption PID=%u -> Dispatch PID=%u en CPU %u Core %u Thread %u\n",
-                       current->pid, next->pid, cpu, core, hw_thread);
+                LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
+                       "Preemption PID=%u -> PID=%u", current->pid, next->pid);
             }
         }
     } else if (kernel->config.scheduler_algorithm == SCHEDULER_CHOCOLATE_CALIENTE) {
         /* Chocolate Caliente: Quantum adaptativo basado en temperatura */
         uint32_t max_quantum = get_max_quantum_by_temperature(current->temperature, kernel->config.rr_quantum);
         
-        printf("[Scheduler] PID=%u Temp=%u°C %s Quantum=%u Ticks=%u/%u TTL=%u\n",
+        LOG_AT_DEBUG(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
+               "PID=%u Temp=%u°C %s Quantum=%u Ticks=%u/%u TTL=%u",
                current->pid, current->temperature, get_temperature_emoji(current->temperature),
                max_quantum, current->ticks_since_swap, max_quantum, current->ttl);
         
@@ -154,7 +166,8 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
                     process_queue_enqueue(kernel->process_queue, waiting);
                 }
                 
-                printf("[Scheduler] Context switch PID=%u (enfriándose) -> PID=%u (quantum=%u)\n",
+                LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
+                       "Context switch PID=%u (enfriándose) -> PID=%u (quantum=%u)",
                        current->pid, next->pid, get_max_quantum_by_temperature(next->temperature, kernel->config.rr_quantum));
             }
         }
