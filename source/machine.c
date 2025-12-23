@@ -5,7 +5,11 @@
 
 #include "../include/machine.h"
 #include "../include/kernel.h"
+#include "../include/instruction.h"
+#include "../include/logging.h"
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include <stdio.h>
 
 static void init_hw_threads(HWThread* threads, uint32_t count)
@@ -14,6 +18,8 @@ static void init_hw_threads(HWThread* threads, uint32_t count)
         threads[i].hw_thread_id = i;
         /* Inicializar con proceso IDLE */
         threads[i].current_pcb = pcb_create_idle();
+        /* Create MMU for this hardware thread */
+        threads[i].mmu = mmu_create();
     }
 }
 
@@ -37,6 +43,9 @@ static void cleanup_cpu(CPU* cpu, uint32_t num_cores)
         for (uint32_t k = 0; k < cpu->cores[i].num_hw_threads; k++) {
             if (cpu->cores[i].hw_threads[k].current_pcb) {
                 pcb_destroy(cpu->cores[i].hw_threads[k].current_pcb);
+            }
+            if (cpu->cores[i].hw_threads[k].mmu) {
+                mmu_destroy(cpu->cores[i].hw_threads[k].mmu);
             }
         }
         free(cpu->cores[i].hw_threads);
@@ -134,14 +143,55 @@ void machine_advance_cycle(Machine* machine, Kernel* kernel)
                 if (pcb->pid == 0)
                     continue;
                 
-                /* 1. Decrementar TTL */
-                if (pcb->ttl > 0) {
+                /* Execute one instruction if program is loaded */
+                if (pcb->is_loaded && thread->mmu) {
+                    /* Ensure MMU is configured for this process */
+                    if (thread->mmu->ptbr != pcb->mm.pgb) {
+                        /* MMU not yet configured, skip this cycle */
+                        continue;
+                    }
+                    
+                    /* Fetch instruction */
+                    uint32_t vaddr = thread->mmu->pc;
+                    uint32_t paddr = mmu_translate(thread->mmu, kernel->physical_memory, vaddr, 0);
+                    
+                    if (paddr != 0xFFFFFFFF) {
+                        Instruction instr = physical_memory_read_word(kernel->physical_memory, paddr);
+                        thread->mmu->ir = instr;
+                        
+                        /* Log instruction fetch */
+                        LOG_AT_DEBUG(LOG_COMPONENT_MACHINE, i, j, k,
+                               "PID=%u PC=0x%06X [%08X]", pcb->pid, vaddr, instr);
+                        
+                        /* Execute instruction */
+                        int continue_exec = instruction_execute(instr, thread->mmu, kernel->physical_memory);
+                        
+                        if (continue_exec) {
+                            /* Move to next instruction */
+                            thread->mmu->pc += WORD_SIZE;
+                        } else {
+                            /* EXIT instruction - program terminated */
+                            LOG_AT_NOTICE(LOG_COMPONENT_MACHINE, i, j, k,
+                                   "PID=%u executed EXIT instruction", pcb->pid);
+                            pcb->state = PROCESS_STATE_TERMINATED;
+                            process_terminated_detected = 1;
+                        }
+                    }
+                }
+                
+                /* 1. Decrementar TTL (for old-style random processes) */
+                if (pcb->ttl > 0 && !pcb->is_loaded) {
                     pcb->ttl--;
                     
                     /* Detectar terminación */
                     if (pcb->ttl == 0) {
                         process_terminated_detected = 1;
                     }
+                }
+                
+                /* Check if TTL-based process (not loaded from file) has terminated */
+                if (!pcb->is_loaded && pcb->ttl == 0) {
+                    process_terminated_detected = 1;
                 }
                 
                 /* 2. Incrementar tiempo de ejecución desde último swap */
@@ -195,25 +245,30 @@ void machine_print_status(Machine* machine)
     
     pthread_mutex_lock(&machine->mutex);
     
-    printf("=== Machine Status ===\n");
-    printf("CPUs: %u\n", machine->num_cpus);
+    LOG_INFO(LOG_COMPONENT_MACHINE, "=== Machine Status ===");
+    char line[256];
+    snprintf(line, sizeof(line), "          │ CPUs: %u\n", machine->num_cpus);
+    write(STDOUT_FILENO, line, strlen(line));
     
     for (uint32_t i = 0; i < machine->num_cpus; i++) {
-        printf("  CPU %u: %u cores\n", i, machine->cpus[i].num_cores);
+        snprintf(line, sizeof(line), "          │   CPU %u: %u cores\n", i, machine->cpus[i].num_cores);
+        write(STDOUT_FILENO, line, strlen(line));
         for (uint32_t j = 0; j < machine->cpus[i].num_cores; j++) {
-            printf("    Core %u: %u hw_threads\n", j, machine->cpus[i].cores[j].num_hw_threads);
+            snprintf(line, sizeof(line), "          │     Core %u: %u hw_threads\n", j, machine->cpus[i].cores[j].num_hw_threads);
+            write(STDOUT_FILENO, line, strlen(line));
             for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
                 HWThread* t = &machine->cpus[i].cores[j].hw_threads[k];
                 if (t->current_pcb) {
                     if (t->current_pcb->pid == 0) {
-                        printf("      HW Thread %u: IDLE (PID=0)\n", k);
+                        snprintf(line, sizeof(line), "          │       HW Thread %u: IDLE (PID=0)\n", k);
                     } else {
-                        printf("      HW Thread %u: PID=%u (TTL=%u)\n", 
-                            k, t->current_pcb->pid, t->current_pcb->ttl);
+                        snprintf(line, sizeof(line), "          │       HW Thread %u: PID=%u (TTL=%u)\n", 
+                                 k, t->current_pcb->pid, t->current_pcb->ttl);
                     }
                 } else {
-                    printf("      HW Thread %u: NULL (Error: No Idle PCB)\n", k);
+                    snprintf(line, sizeof(line), "          │       HW Thread %u: NULL (Error: No Idle PCB)\n", k);
                 }
+                write(STDOUT_FILENO, line, strlen(line));
             }
         }
     }

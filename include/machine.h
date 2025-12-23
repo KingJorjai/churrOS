@@ -10,6 +10,7 @@
 #include <pthread.h>
 
 #include "pcb.h"
+#include "memory.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,6 +23,7 @@ typedef struct Kernel Kernel;
 typedef struct {
     uint32_t hw_thread_id;
     PCB* current_pcb;      /* Proceso asignado (NULL = idle) */
+    MMU* mmu;              /* Memory Management Unit (Parte 3) */
 } HWThread;
 
 /* Core (núcleo) */
