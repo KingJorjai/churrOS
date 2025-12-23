@@ -247,11 +247,20 @@ El proyecto incluye una suite completa de tests automatizados:
 ✅ Parámetros configurables por línea de comandos
 ✅ **Suite de 18 tests automatizados**
 ✅ **Arquitectura modular y realista** (refleja comportamiento de SO real)
+✅ **Parte 3: Gestor de Memoria Virtual** (NUEVO)
+  - ✅ Physical Memory con 16MB, paginación de 4KB
+  - ✅ MMU con TLB de 16 entradas por HW Thread
+  - ✅ Tablas de páginas en espacio del kernel
+  - ✅ Loader que carga programas desde archivos .elf
+  - ✅ Instruction set (LD, ST, ADD, EXIT) implementado
+  - ✅ Motor de ejecución con traducción virtual→física
+  - ✅ Programas de ejemplo funcionando
 
 ## Futuras Mejoras
 
-- Parte 4: Implementar memoria virtual
-- Parte 5: Añadir sistema de archivos simulado
+- Parte 4: Ampliar instruction set (branches, más operaciones)
+- Parte 5: Implementar page faults y swapping
+- Parte 6: Añadir sistema de archivos simulado
 
 ## Licencia
 

@@ -17,6 +17,9 @@ KERNEL_SOURCES := $(SRC_DIR)/clock.c \
                   $(SRC_DIR)/machine.c \
 				  $(SRC_DIR)/logging.c \
 				  $(SRC_DIR)/scheduler.c \
+				  $(SRC_DIR)/memory.c \
+				  $(SRC_DIR)/instruction.c \
+				  $(SRC_DIR)/loader.c \
                   $(SRC_DIR)/kernel.c \
                   $(SRC_DIR)/main.c
 
@@ -33,7 +36,10 @@ LIB_SOURCES := $(SRC_DIR)/clock.c \
                $(SRC_DIR)/process_queue.c \
                $(SRC_DIR)/machine.c \
 			   $(SRC_DIR)/kernel.c \
-			   $(SRC_DIR)/logging.c
+			   $(SRC_DIR)/logging.c \
+			   $(SRC_DIR)/memory.c \
+			   $(SRC_DIR)/instruction.c \
+			   $(SRC_DIR)/loader.c
 LIB_OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/lib_%.o,$(LIB_SOURCES))
 LIB := $(BUILD_DIR)/libchurros.a
 
