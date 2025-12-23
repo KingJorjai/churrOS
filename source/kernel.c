@@ -6,8 +6,10 @@
 #include "../include/kernel.h"
 #include "../include/pcb.h"
 #include "../include/scheduler.h"
+#include "../include/loader.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <time.h>
 #include "../include/logging.h"
@@ -36,6 +38,13 @@ Kernel* kernel_create(KernelConfig* config)
     /* Copiar configuración */
     kernel->config = *config;
     
+    /* Create physical memory (Parte 3) */
+    kernel->physical_memory = physical_memory_create();
+    if (!kernel->physical_memory) {
+        free(kernel);
+        return NULL;
+    }
+    
     /* Crear la máquina */
     kernel->machine = machine_create(
         config->num_cpus,
@@ -44,6 +53,7 @@ Kernel* kernel_create(KernelConfig* config)
     );
     
     if (!kernel->machine) {
+        physical_memory_destroy(kernel->physical_memory);
         free(kernel);
         return NULL;
     }
@@ -52,6 +62,7 @@ Kernel* kernel_create(KernelConfig* config)
     kernel->process_queue = (ProcessQueue*)malloc(sizeof(ProcessQueue));
     if (!kernel->process_queue) {
         machine_destroy(kernel->machine);
+        physical_memory_destroy(kernel->physical_memory);
         free(kernel);
         return NULL;
     }
@@ -63,6 +74,7 @@ Kernel* kernel_create(KernelConfig* config)
         process_queue_destroy(kernel->process_queue);
         free(kernel->process_queue);
         machine_destroy(kernel->machine);
+        physical_memory_destroy(kernel->physical_memory);
         free(kernel);
         return NULL;
     }
@@ -97,6 +109,7 @@ void kernel_destroy(Kernel* kernel)
     process_queue_destroy(kernel->process_queue);
     free(kernel->process_queue);
     machine_destroy(kernel->machine);
+    physical_memory_destroy(kernel->physical_memory);
     clock_destroy();
     
     /* Destruir mutexes y condition variables */
@@ -122,50 +135,45 @@ int kernel_start(Kernel* kernel)
     kernel->running = 1;
     pthread_mutex_unlock(&kernel->running_mutex);
     
-    printf("=== Iniciando Kernel de churrOS ===\n");
-    printf("Configuración:\n");
-    printf("  CPUs: %u\n", kernel->config.num_cpus);
-    printf("  Cores por CPU: %u\n", kernel->config.num_cores_per_cpu);
-    printf("  HW Threads por Core: %u\n", kernel->config.num_hw_threads_per_core);
-    printf("  Algoritmo de scheduling: %s\n", 
-           kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" :
-           kernel->config.scheduler_algorithm == SCHEDULER_FIFO ? "FIFO" : "Chocolate Caliente");
-    if (kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN) {
-        printf("  Quantum (Round Robin): %u ticks\n", kernel->config.rr_quantum);
-    } else if (kernel->config.scheduler_algorithm == SCHEDULER_CHOCOLATE_CALIENTE) {
-        printf("  Quantum base (Chocolate Caliente): %u ticks\n", kernel->config.rr_quantum);
-        printf("  → Quantum adaptativo según temperatura\n");
-    }
-    printf("  Periodo de generación de procesos: %u ticks\n", kernel->config.process_gen_period);
-    printf("  Velocidad del reloj: %u ms\n", kernel->config.clock_speed_ms);
-    if (kernel->config.simulation_duration > 0)
-        printf("  Duración de la simulación: %u ticks\n", kernel->config.simulation_duration);
-    else
-        printf("  Duración de la simulación: infinita\n");
-    printf("===================================\n\n");
+    /* Log configuration */
+    LOG_NOTICE(LOG_COMPONENT_KERNEL, "=== Iniciando churrOS ===");
+    char line[256];
+    snprintf(line, sizeof(line), "          │ CPUs: %u, Cores: %u, HW Threads: %u\n",
+           kernel->config.num_cpus, kernel->config.num_cores_per_cpu, kernel->config.num_hw_threads_per_core);
+    write(STDOUT_FILENO, line, strlen(line));
+    
+    const char* algo_name = kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" :
+                           kernel->config.scheduler_algorithm == SCHEDULER_FIFO ? "FIFO" : "Chocolate Caliente";
+    snprintf(line, sizeof(line), "          │ Algoritmo: %s (quantum=%u ticks)\n", algo_name, kernel->config.rr_quantum);
+    write(STDOUT_FILENO, line, strlen(line));
+    
+    snprintf(line, sizeof(line), "          │ Generación: %u ticks, Clock: %u ms, Duración: %s\n",
+           kernel->config.process_gen_period, kernel->config.clock_speed_ms,
+           kernel->config.simulation_duration > 0 ? "limitada" : "infinita");
+    write(STDOUT_FILENO, line, strlen(line));
     
     /* Crear e iniciar hilos */
     if (pthread_create(&kernel->scheduler_thread, NULL, scheduler_thread_func, kernel) != 0) {
-        fprintf(stderr, "Error al crear el hilo Scheduler\n");
+        LOG_CRITICAL(LOG_COMPONENT_KERNEL, "Error al crear hilo Scheduler");
         kernel->running = 0;
         return -1;
     }
     
     if (pthread_create(&kernel->process_gen_thread, NULL, process_generator_thread_func, kernel) != 0) {
-        fprintf(stderr, "Error al crear el hilo Process Generator\n");
+        LOG_CRITICAL(LOG_COMPONENT_KERNEL, "Error al crear hilo Process Generator");
         kernel->running = 0;
         return -1;
     }
     
     /* Crear hilo monitor del timer del generador de procesos */
     if (pthread_create(&kernel->procgen_timer_thread, NULL, procgen_timer_thread_func, kernel) != 0) {
-        fprintf(stderr, "Error al crear el hilo Timer (procgen)\n");
+        LOG_CRITICAL(LOG_COMPONENT_KERNEL, "Error al crear hilo Timer");
         kernel->running = 0;
         return -1;
     }
     
     if (pthread_create(&kernel->clock_thread, NULL, clock_thread_func, kernel) != 0) {
-        fprintf(stderr, "Error al crear el hilo Clock\n");
+        LOG_CRITICAL(LOG_COMPONENT_KERNEL, "Error al crear hilo Clock");
         kernel->running = 0;
         return -1;
     }
@@ -186,7 +194,7 @@ void kernel_stop(Kernel* kernel)
     kernel->running = 0;
     pthread_mutex_unlock(&kernel->running_mutex);
 
-    printf("\n=== Deteniendo Kernel ===\n");
+    LOG_NOTICE(LOG_COMPONENT_KERNEL, "=== Deteniendo Kernel ===");
 
     churros_timer_wake(kernel->procgen_timer);
     
@@ -204,7 +212,7 @@ void kernel_stop(Kernel* kernel)
     pthread_join(kernel->scheduler_thread, NULL);
     pthread_join(kernel->process_gen_thread, NULL);
 
-    printf("Kernel detenido correctamente.\n");
+    LOG_INFO(LOG_COMPONENT_KERNEL, "Kernel detenido correctamente");
 }
 
 uint32_t kernel_get_next_pid(Kernel* kernel)
@@ -237,27 +245,27 @@ static void* clock_thread_func(void* arg)
     Kernel* kernel = (Kernel*)arg;
     uint32_t tick_count = 0;
     
-    printf("[Clock] Iniciado\n");
+    LOG_INFO(LOG_COMPONENT_CLOCK, "Clock iniciado");
     
     while (kernel_is_running(kernel)) {
         usleep(kernel->config.clock_speed_ms * 1000);
         
         clock_pulse();
         tick_count++;
-        LOG_TICK("Clock", tick_count);
+        LOG_DEBUG(LOG_COMPONENT_CLOCK, "[%u] Tick", tick_count);
         
         machine_advance_cycle(kernel->machine, kernel);
         churros_timer_tick(kernel->procgen_timer);
         
         if (kernel->config.simulation_duration > 0 && 
             tick_count >= kernel->config.simulation_duration) {
-            printf("[Clock] Duración de simulación alcanzada (%u ticks)\n", tick_count);
+            LOG_NOTICE(LOG_COMPONENT_CLOCK, "Duración de simulación alcanzada (%u ticks)", tick_count);
             kernel_stop(kernel);
             break;
         }
     }
     
-    printf("[Clock] Terminado (total de ticks: %u)\n", tick_count);
+    LOG_INFO(LOG_COMPONENT_CLOCK, "Terminado (total de ticks: %u)", tick_count);
     return NULL;
 }
 
@@ -274,7 +282,7 @@ static void* timer_monitor_thread(void* arg, Timer* timer, const char* name, int
         while (total > interrupt_count) {
             interrupt_count++;
             if (!silent) {
-                printf("[%s] Activación #%u por interrupción del timer\n", name, interrupt_count);
+                LOG_DEBUG(LOG_COMPONENT_TIMER, "[%s] Activación #%u por interrupción del timer", name, interrupt_count);
             }
         }
     }
@@ -299,7 +307,7 @@ static void* scheduler_thread_func(void* arg)
     Kernel* kernel = (Kernel*)arg;
     uint32_t activation_count = 0;
     
-    printf("[Scheduler] Iniciado (event-driven)\n");
+    LOG_INFO(LOG_COMPONENT_SCHEDULER, "Scheduler iniciado (event-driven)");
     
     while (kernel_is_running(kernel)) {
         /* Esperar a que haya eventos pendientes */
@@ -335,15 +343,17 @@ static void* scheduler_thread_func(void* arg)
         pthread_mutex_unlock(&kernel->machine->mutex);
     }
     
-    printf("[Scheduler] Terminado (activaciones totales: %u)\n", activation_count);
+    LOG_INFO(LOG_COMPONENT_SCHEDULER, "Scheduler terminado (activaciones totales: %u)", activation_count);
     return NULL;
 }
 
 static void* process_generator_thread_func(void* arg)
 {
     Kernel* kernel = (Kernel*)arg;
+    uint32_t prog_count = 0;
 
-    printf("[ProcessGenerator] Iniciado (periodo: %u ticks, %llu ms)\n",
+    LOG_INFO(LOG_COMPONENT_LOADER,
+           "Loader iniciado (periodo: %u ticks, %llu ms)",
         kernel->config.process_gen_period,
         (unsigned long long)kernel->config.process_gen_period * kernel->config.clock_speed_ms);
 
@@ -353,22 +363,60 @@ static void* process_generator_thread_func(void* arg)
         if (!kernel_is_running(kernel))
             break;
 
-        uint32_t pid = kernel_get_next_pid(kernel);
-        PCB* pcb = pcb_create(pid);
-
+        /* Try to load a program from file */
+        char filename[256];
+        snprintf(filename, sizeof(filename), "prog%03u.elf", prog_count);
+        
+        PCB* pcb = loader_load_program(filename, kernel->physical_memory, &kernel->next_pid);
+        
         if (pcb) {
+            /* Program loaded successfully */
             pcb->state = PROCESS_STATE_READY;
             process_queue_enqueue(kernel->process_queue, pcb);
-            printf("[ProcessGenerator] Nuevo proceso creado: PID=%u, TTL=%u\n", 
-                   pcb->pid, pcb->ttl);
+            LOG_NOTICE(LOG_COMPONENT_LOADER, "Programa %s cargado: PID=%u", filename, pcb->pid);
+            
+            /* Dump data segment before execution */
+            LOG_DEBUG(LOG_COMPONENT_LOADER, "Data segment before execution:");
+            uint32_t data_start_phys = 0;
+            uint32_t data_vpn = GET_VPN(pcb->mm.data_start);
+            
+            /* We need to access the page table to get physical address */
+            uint32_t pte_addr = pcb->mm.pgb + data_vpn * sizeof(PageTableEntry);
+            uint32_t pte_data = physical_memory_read_word(kernel->physical_memory, pte_addr);
+            PageTableEntry pte;
+            memcpy(&pte, &pte_data, sizeof(PageTableEntry));
+            
+            if (pte.valid && pte.present) {
+                data_start_phys = (pte.pfn << PAGE_BITS) | GET_OFFSET(pcb->mm.data_start);
+                physical_memory_dump(kernel->physical_memory, data_start_phys, 
+                                    pcb->mm.data_size / WORD_SIZE);
+            }
             
             /* Señalizar al scheduler que hay un nuevo proceso */
             kernel_signal_scheduler(kernel, SCHED_EVENT_PROCESS_CREATED);
+            prog_count++;
         } else {
-            fprintf(stderr, "[ProcessGenerator] Error al crear el proceso\n");
+            /* No more program files, fall back to random process generation */
+            LOG_WARN(LOG_COMPONENT_LOADER, "No se encontró %s, generando proceso aleatorio", filename);
+            
+            uint32_t pid = kernel_get_next_pid(kernel);
+            pcb = pcb_create(pid);
+
+            if (pcb) {
+                pcb->state = PROCESS_STATE_READY;
+                process_queue_enqueue(kernel->process_queue, pcb);
+                LOG_DEBUG(LOG_COMPONENT_PROCESS, 
+                       "Nuevo proceso creado: PID=%u, TTL=%u", 
+                       pcb->pid, pcb->ttl);
+                
+                /* Señalizar al scheduler que hay un nuevo proceso */
+                kernel_signal_scheduler(kernel, SCHED_EVENT_PROCESS_CREATED);
+            } else {
+                LOG_ERROR(LOG_COMPONENT_PROCESS, "Error al crear el proceso");
+            }
         }
     }
     
-    printf("[ProcessGenerator] Terminado\n");
+    LOG_INFO(LOG_COMPONENT_LOADER, "Loader terminado");
     return NULL;
 }

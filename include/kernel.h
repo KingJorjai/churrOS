@@ -10,6 +10,7 @@
 #include "timer.h"
 #include "machine.h"
 #include "process_queue.h"
+#include "memory.h"
 #include <pthread.h>
 #include <stdint.h>
 
@@ -52,6 +53,7 @@ struct Kernel {
     Machine* machine;
     ProcessQueue* process_queue;
     Timer* procgen_timer;     /* Timer para el ProcessGenerator */
+    PhysicalMemory* physical_memory;  /* Physical Memory (Parte 3) */
     
     /* Sistema de señalización para eventos del scheduler */
     pthread_cond_t scheduler_cond;    /* Condition variable para despertar al scheduler */
