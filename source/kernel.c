@@ -365,7 +365,7 @@ static void* process_generator_thread_func(void* arg)
 
         /* Try to load a program from file */
         char filename[256];
-        snprintf(filename, sizeof(filename), "prog%03u.elf", prog_count);
+        snprintf(filename, sizeof(filename), "elfs/prog%03u.elf", prog_count);
         
         PCB* pcb = loader_load_program(filename, kernel->physical_memory, &kernel->next_pid);
         

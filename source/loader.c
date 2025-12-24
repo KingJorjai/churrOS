@@ -21,7 +21,8 @@ int loader_parse_program(const char* filename, ProgramInfo* info,
     }
     
     char line[256];
-    int in_text = 0, in_data = 0;
+    int headers_read = 0; /* 0=none, 1=.text, 2=both */
+    int in_code = 0;      /* Reading code section */
     uint32_t* text_arr = NULL;
     uint32_t* data_arr = NULL;
     uint32_t text_count = 0, data_count = 0;
@@ -38,6 +39,7 @@ int loader_parse_program(const char* filename, ProgramInfo* info,
         return -1;
     }
     
+    /* Prometheus format: .text header, .data header, then code, then data */
     while (fgets(line, sizeof(line), fp)) {
         /* Remove trailing newline */
         line[strcspn(line, "\n")] = 0;
@@ -48,36 +50,41 @@ int loader_parse_program(const char* filename, ProgramInfo* info,
         /* Check for segment markers */
         if (strncmp(line, ".text", 5) == 0) {
             sscanf(line, ".text %x", &info->text_start);
-            in_text = 1;
-            in_data = 0;
+            headers_read = 1;
             continue;
         }
         
         if (strncmp(line, ".data", 5) == 0) {
             sscanf(line, ".data %x", &info->data_start);
-            in_text = 0;
-            in_data = 1;
+            headers_read = 2;
+            in_code = 1; /* After both headers, code section starts */
             continue;
         }
         
-        /* Parse data */
-        if (in_text) {
+        /* Parse content: after both headers, code comes first, then data */
+        if (headers_read == 2) {
             uint32_t value;
             if (sscanf(line, "%x", &value) == 1) {
-                if (text_count >= text_capacity) {
-                    text_capacity *= 2;
-                    text_arr = (uint32_t*)realloc(text_arr, text_capacity * sizeof(uint32_t));
+                if (in_code) {
+                    /* Add to code section */
+                    if (text_count >= text_capacity) {
+                        text_capacity *= 2;
+                        text_arr = (uint32_t*)realloc(text_arr, text_capacity * sizeof(uint32_t));
+                    }
+                    text_arr[text_count++] = value;
+                    
+                    /* EXIT instruction marks end of code section */
+                    if ((value & 0xF0000000) == 0xF0000000) {
+                        in_code = 0; /* Switch to data section */
+                    }
+                } else {
+                    /* Add to data section */
+                    if (data_count >= data_capacity) {
+                        data_capacity *= 2;
+                        data_arr = (uint32_t*)realloc(data_arr, data_capacity * sizeof(uint32_t));
+                    }
+                    data_arr[data_count++] = value;
                 }
-                text_arr[text_count++] = value;
-            }
-        } else if (in_data) {
-            uint32_t value;
-            if (sscanf(line, "%x", &value) == 1) {
-                if (data_count >= data_capacity) {
-                    data_capacity *= 2;
-                    data_arr = (uint32_t*)realloc(data_arr, data_capacity * sizeof(uint32_t));
-                }
-                data_arr[data_count++] = value;
             }
         }
     }
