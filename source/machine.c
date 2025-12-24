@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <stdio.h>
 
-static void init_hw_threads(HWThread* threads, uint32_t count)
+static void init_hw_threads(HWThread* threads, uint32_t count, uint32_t cpu_id, uint32_t core_id)
 {
     for (uint32_t i = 0; i < count; i++) {
         threads[i].hw_thread_id = i;
@@ -20,10 +20,12 @@ static void init_hw_threads(HWThread* threads, uint32_t count)
         threads[i].current_pcb = pcb_create_idle();
         /* Create MMU for this hardware thread */
         threads[i].mmu = mmu_create();
+        LOG_DEBUG(LOG_COMPONENT_MMU, "(%u:%u:%u) TLB initialized (%d entries)",
+                 cpu_id, core_id, i, TLB_SIZE);
     }
 }
 
-static int init_core(Core* core, uint32_t core_id, uint32_t num_threads)
+static int init_core(Core* core, uint32_t core_id, uint32_t num_threads, uint32_t cpu_id)
 {
     core->core_id = core_id;
     core->num_hw_threads = num_threads;
@@ -32,7 +34,7 @@ static int init_core(Core* core, uint32_t core_id, uint32_t num_threads)
     if (!core->hw_threads)
         return -1;
     
-    init_hw_threads(core->hw_threads, num_threads);
+    init_hw_threads(core->hw_threads, num_threads, cpu_id, core_id);
     return 0;
 }
 
@@ -63,7 +65,7 @@ static int init_cpu(CPU* cpu, uint32_t cpu_id, uint32_t num_cores, uint32_t num_
         return -1;
     
     for (uint32_t i = 0; i < num_cores; i++) {
-        if (init_core(&cpu->cores[i], i, num_threads) != 0) {
+        if (init_core(&cpu->cores[i], i, num_threads, cpu_id) != 0) {
             for (uint32_t j = 0; j < i; j++) {
                 free(cpu->cores[j].hw_threads);
             }

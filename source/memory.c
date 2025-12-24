@@ -202,13 +202,21 @@ void physical_memory_print_stats(PhysicalMemory* mem)
     float usage_pct = (float)user_frames * 100.0f / total_user;
     float peak_pct = (float)(mem->peak_usage - mem->kernel_end_frame) * 100.0f / total_user;
     
-    LOG_NOTICE(LOG_COMPONENT_MEMORY, 
-               "Memory: %u/%u user frames (%.1f%%), peak: %u (%.1f%%)",
-               user_frames, total_user, usage_pct, 
-               mem->peak_usage - mem->kernel_end_frame, peak_pct);
-    LOG_INFO(LOG_COMPONENT_MEMORY, 
-             "  Allocations: %lu, Frees: %lu",
-             (unsigned long)mem->allocations, (unsigned long)mem->frees);
+    if (log_get_level() <= LOG_LEVEL_INFO) {
+        char line[256];
+        snprintf(line, sizeof(line), "          │ Memory: %u/%u user frames (%.1f%%), peak: %u (%.1f%%)\n",
+                user_frames, total_user, usage_pct, 
+                mem->peak_usage - mem->kernel_end_frame, peak_pct);
+        write(STDOUT_FILENO, line, strlen(line));
+        snprintf(line, sizeof(line), "          │   Allocations: %lu, Frees: %lu\n",
+                (unsigned long)mem->allocations, (unsigned long)mem->frees);
+        write(STDOUT_FILENO, line, strlen(line));
+    } else if (log_get_level() == LOG_LEVEL_NOTICE) {
+        LOG_NOTICE(LOG_COMPONENT_MEMORY, 
+                   "Memory: %u/%u frames (%.1f%%), peak: %u (%.1f%%)",
+                   user_frames, total_user, usage_pct, 
+                   mem->peak_usage - mem->kernel_end_frame, peak_pct);
+    }
 }
 
 void mmu_print_tlb_stats(MMU* mmu)
@@ -222,9 +230,17 @@ void mmu_print_tlb_stats(MMU* mmu)
     }
     
     float hit_rate = (float)mmu->tlb.hits * 100.0f / total;
-    LOG_NOTICE(LOG_COMPONENT_MMU, 
-               "TLB: %lu hits, %lu misses (%.1f%% hit rate)",
-               (unsigned long)mmu->tlb.hits, (unsigned long)mmu->tlb.misses, hit_rate);
+    
+    if (log_get_level() <= LOG_LEVEL_INFO) {
+        char line[256];
+        snprintf(line, sizeof(line), "          │   TLB: %lu hits, %lu misses (%.1f%% hit rate)\n",
+                (unsigned long)mmu->tlb.hits, (unsigned long)mmu->tlb.misses, hit_rate);
+        write(STDOUT_FILENO, line, strlen(line));
+    } else if (log_get_level() == LOG_LEVEL_NOTICE) {
+        LOG_NOTICE(LOG_COMPONENT_MMU, 
+                   "TLB: %lu hits, %lu misses (%.1f%% hit rate)",
+                   (unsigned long)mmu->tlb.hits, (unsigned long)mmu->tlb.misses, hit_rate);
+    }
 }
 
 /* ============================================
@@ -277,8 +293,13 @@ void mmu_reset(MMU* mmu)
     mmu->ir = 0;
     mmu->ptbr = 0;
     
-    /* Invalidate TLB */
-    mmu_tlb_flush(mmu);
+    /* Invalidate TLB (silently during initialization) */
+    for (int i = 0; i < TLB_SIZE; i++) {
+        mmu->tlb.entries[i].valid = 0;
+        mmu->tlb.entries[i].vpn = 0;
+        mmu->tlb.entries[i].pfn = 0;
+    }
+    mmu->tlb.next_replace = 0;
     mmu->tlb.hits = 0;
     mmu->tlb.misses = 0;
 }

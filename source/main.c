@@ -149,7 +149,6 @@ int main(int argc, char* argv[])
     
     pthread_join(main_kernel->clock_thread, NULL);
     
-    LOG_SEPARATOR();
     LOG_INFO(LOG_COMPONENT_KERNEL, "Estadísticas Finales");
     if (log_get_level() <= LOG_LEVEL_INFO) {
         char line[256];
@@ -188,7 +187,6 @@ int main(int argc, char* argv[])
         }
     }
     
-    LOG_SEPARATOR();
     machine_print_status(main_kernel->machine);
     kernel_destroy(main_kernel);
     
