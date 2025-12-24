@@ -38,7 +38,7 @@ typedef uint32_t Instruction;
 int instruction_execute(Instruction instr, MMU* mmu, PhysicalMemory* mem);
 
 /* Decode and print instruction for debugging */
-void instruction_print(Instruction instr, uint32_t addr, int is_continuation);
+void instruction_print(Instruction instr, uint32_t addr);
 
 #ifdef __cplusplus
 }

@@ -136,21 +136,24 @@ int kernel_start(Kernel* kernel)
     pthread_mutex_unlock(&kernel->running_mutex);
     
     /* Log configuration */
-    LOG_NOTICE(LOG_COMPONENT_KERNEL, "=== Iniciando churrOS ===");
-    char line[256];
-    snprintf(line, sizeof(line), "          │ CPUs: %u, Cores: %u, HW Threads: %u\n",
-           kernel->config.num_cpus, kernel->config.num_cores_per_cpu, kernel->config.num_hw_threads_per_core);
-    write(STDOUT_FILENO, line, strlen(line));
+    LOG_NOTICE(LOG_COMPONENT_KERNEL, "Iniciando churrOS");
     
-    const char* algo_name = kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" :
-                           kernel->config.scheduler_algorithm == SCHEDULER_FIFO ? "FIFO" : "Chocolate Caliente";
-    snprintf(line, sizeof(line), "          │ Algoritmo: %s (quantum=%u ticks)\n", algo_name, kernel->config.rr_quantum);
-    write(STDOUT_FILENO, line, strlen(line));
-    
-    snprintf(line, sizeof(line), "          │ Generación: %u ticks, Clock: %u ms, Duración: %s\n",
-           kernel->config.process_gen_period, kernel->config.clock_speed_ms,
-           kernel->config.simulation_duration > 0 ? "limitada" : "infinita");
-    write(STDOUT_FILENO, line, strlen(line));
+    if (log_get_level() <= LOG_LEVEL_INFO) {
+        char line[256];
+        snprintf(line, sizeof(line), "          │ CPUs: %u, Cores: %u, HW Threads: %u\n",
+               kernel->config.num_cpus, kernel->config.num_cores_per_cpu, kernel->config.num_hw_threads_per_core);
+        write(STDOUT_FILENO, line, strlen(line));
+        
+        const char* algo_name = kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" :
+                               kernel->config.scheduler_algorithm == SCHEDULER_FIFO ? "FIFO" : "Chocolate Caliente";
+        snprintf(line, sizeof(line), "          │ Algoritmo: %s (quantum=%u ticks)\n", algo_name, kernel->config.rr_quantum);
+        write(STDOUT_FILENO, line, strlen(line));
+        
+        snprintf(line, sizeof(line), "          │ Generación: %u ticks, Clock: %u ms, Duración: %s\n",
+               kernel->config.process_gen_period, kernel->config.clock_speed_ms,
+               kernel->config.simulation_duration > 0 ? "limitada" : "infinita");
+        write(STDOUT_FILENO, line, strlen(line));
+    }
     
     /* Crear e iniciar hilos */
     if (pthread_create(&kernel->scheduler_thread, NULL, scheduler_thread_func, kernel) != 0) {
@@ -194,7 +197,7 @@ void kernel_stop(Kernel* kernel)
     kernel->running = 0;
     pthread_mutex_unlock(&kernel->running_mutex);
 
-    LOG_NOTICE(LOG_COMPONENT_KERNEL, "=== Deteniendo Kernel ===");
+    LOG_NOTICE(LOG_COMPONENT_KERNEL, "Deteniendo Kernel");
 
     churros_timer_wake(kernel->procgen_timer);
     
@@ -373,7 +376,7 @@ static void* process_generator_thread_func(void* arg)
             /* Program loaded successfully */
             pcb->state = PROCESS_STATE_READY;
             process_queue_enqueue(kernel->process_queue, pcb);
-            LOG_NOTICE(LOG_COMPONENT_LOADER, "Programa %s cargado: PID=%u", filename, pcb->pid);
+            LOG_INFO(LOG_COMPONENT_LOADER, "Programa %s cargado: PID=%u", filename, pcb->pid);
             
             /* Dump data segment before execution */
             LOG_DEBUG(LOG_COMPONENT_LOADER, "Data segment before execution:");

@@ -264,30 +264,33 @@ void machine_print_status(Machine* machine)
     
     pthread_mutex_lock(&machine->mutex);
     
-    LOG_INFO(LOG_COMPONENT_MACHINE, "=== Machine Status ===");
-    char line[256];
-    snprintf(line, sizeof(line), "          │ CPUs: %u\n", machine->num_cpus);
-    write(STDOUT_FILENO, line, strlen(line));
+    LOG_DEBUG(LOG_COMPONENT_MACHINE, "Machine Status");
     
-    for (uint32_t i = 0; i < machine->num_cpus; i++) {
-        snprintf(line, sizeof(line), "          │   CPU %u: %u cores\n", i, machine->cpus[i].num_cores);
+    if (log_get_level() <= LOG_LEVEL_DEBUG) {
+        char line[256];
+        snprintf(line, sizeof(line), "          │ CPUs: %u\n", machine->num_cpus);
         write(STDOUT_FILENO, line, strlen(line));
-        for (uint32_t j = 0; j < machine->cpus[i].num_cores; j++) {
-            snprintf(line, sizeof(line), "          │     Core %u: %u hw_threads\n", j, machine->cpus[i].cores[j].num_hw_threads);
+        
+        for (uint32_t i = 0; i < machine->num_cpus; i++) {
+            snprintf(line, sizeof(line), "          │   CPU %u: %u cores\n", i, machine->cpus[i].num_cores);
             write(STDOUT_FILENO, line, strlen(line));
-            for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
-                HWThread* t = &machine->cpus[i].cores[j].hw_threads[k];
-                if (t->current_pcb) {
-                    if (t->current_pcb->pid == 0) {
-                        snprintf(line, sizeof(line), "          │       HW Thread %u: IDLE (PID=0)\n", k);
-                    } else {
-                        snprintf(line, sizeof(line), "          │       HW Thread %u: PID=%u (TTL=%u)\n", 
-                                 k, t->current_pcb->pid, t->current_pcb->ttl);
-                    }
-                } else {
-                    snprintf(line, sizeof(line), "          │       HW Thread %u: NULL (Error: No Idle PCB)\n", k);
-                }
+            for (uint32_t j = 0; j < machine->cpus[i].num_cores; j++) {
+                snprintf(line, sizeof(line), "          │     Core %u: %u hw_threads\n", j, machine->cpus[i].cores[j].num_hw_threads);
                 write(STDOUT_FILENO, line, strlen(line));
+                for (uint32_t k = 0; k < machine->cpus[i].cores[j].num_hw_threads; k++) {
+                    HWThread* t = &machine->cpus[i].cores[j].hw_threads[k];
+                    if (t->current_pcb) {
+                        if (t->current_pcb->pid == 0) {
+                            snprintf(line, sizeof(line), "          │       HW Thread %u: IDLE (PID=0)\n", k);
+                        } else {
+                            snprintf(line, sizeof(line), "          │       HW Thread %u: PID=%u (TTL=%u)\n", 
+                                     k, t->current_pcb->pid, t->current_pcb->ttl);
+                        }
+                    } else {
+                        snprintf(line, sizeof(line), "          │       HW Thread %u: NULL (Error: No Idle PCB)\n", k);
+                    }
+                    write(STDOUT_FILENO, line, strlen(line));
+                }
             }
         }
     }

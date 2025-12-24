@@ -73,7 +73,6 @@ int main(int argc, char* argv[])
     };
     
     int opt;
-    int option_index = 0;
     
     // Primero procesamos opciones largas manualmente
     for (int i = 1; i < argc; i++) {
@@ -146,13 +145,14 @@ int main(int argc, char* argv[])
     
     pthread_join(main_kernel->clock_thread, NULL);
     
-    LOG_INFO(LOG_COMPONENT_KERNEL, "=== Estadísticas Finales ===");
-    char line[256];
-    snprintf(line, sizeof(line), "          │ Procesos totales generados: %u\n", main_kernel->next_pid - 1);
-    write(STDOUT_FILENO, line, strlen(line));
-    snprintf(line, sizeof(line), "          │ Procesos en cola: %u\n", process_queue_size(main_kernel->process_queue));
-    write(STDOUT_FILENO, line, strlen(line));
-    
+    LOG_INFO(LOG_COMPONENT_KERNEL, "Estadísticas Finales");
+    if (log_get_level() <= LOG_LEVEL_INFO) {
+        char line[256];
+        snprintf(line, sizeof(line), "          │ Procesos totales generados: %u\n", main_kernel->next_pid - 1);
+        write(STDOUT_FILENO, line, strlen(line));
+        snprintf(line, sizeof(line), "          │ Procesos en cola: %u\n", process_queue_size(main_kernel->process_queue));
+        write(STDOUT_FILENO, line, strlen(line));
+    }
     machine_print_status(main_kernel->machine);
     kernel_destroy(main_kernel);
     

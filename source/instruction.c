@@ -89,7 +89,7 @@ int instruction_execute(Instruction instr, MMU* mmu, PhysicalMemory* mem)
     return 1;  /* Continue execution */
 }
 
-void instruction_print(Instruction instr, uint32_t addr, int is_continuation)
+void instruction_print(Instruction instr, uint32_t addr)
 {
     uint32_t opcode = GET_OPCODE(instr);
     char buffer[128];

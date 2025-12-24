@@ -156,9 +156,11 @@ PCB* loader_load_program(const char* filename, PhysicalMemory* mem, uint32_t* ne
     /* Load code segment into memory */
     uint32_t text_words = info.text_size / WORD_SIZE;
     
-    char line[256];
-    snprintf(line, sizeof(line), "          │ Loading .text segment (%u words)\n", text_words);
-    write(STDOUT_FILENO, line, strlen(line));
+    if (log_get_level() <= LOG_LEVEL_DEBUG) {
+        char line[256];
+        snprintf(line, sizeof(line), "          │ Loading .text segment (%u words)\n", text_words);
+        write(STDOUT_FILENO, line, strlen(line));
+    }
     for (uint32_t i = 0; i < text_words; i++) {
         uint32_t vaddr = info.text_start + i * WORD_SIZE;
         uint32_t vpn = GET_VPN(vaddr);
@@ -189,8 +191,11 @@ PCB* loader_load_program(const char* filename, PhysicalMemory* mem, uint32_t* ne
     /* Load data segment into memory */
     uint32_t data_words = info.data_size / WORD_SIZE;
     
-    snprintf(line, sizeof(line), "          │ Loading .data segment (%u words)\n", data_words);
-    write(STDOUT_FILENO, line, strlen(line));
+    if (log_get_level() <= LOG_LEVEL_DEBUG) {
+        char line[256];
+        snprintf(line, sizeof(line), "          │ Loading .data segment (%u words)\n", data_words);
+        write(STDOUT_FILENO, line, strlen(line));
+    }
     for (uint32_t i = 0; i < data_words; i++) {
         uint32_t vaddr = info.data_start + i * WORD_SIZE;
         uint32_t vpn = GET_VPN(vaddr);
@@ -220,33 +225,35 @@ PCB* loader_load_program(const char* filename, PhysicalMemory* mem, uint32_t* ne
     
     pcb->is_loaded = 1;
     
-    LOG_NOTICE(LOG_COMPONENT_LOADER, 
+    LOG_INFO(LOG_COMPONENT_LOADER, 
            "Program loaded successfully (PID=%u, PTBR=0x%06X)", pcb->pid, pcb->mm.pgb);
     
-    /* Print program disassembly */
-    LOG_DEBUG(LOG_COMPONENT_LOADER, "Program disassembly:");
-    
-    /* Print .text section header */
-    char section_line[256];
-    snprintf(section_line, sizeof(section_line), "          │ .text @0x%06X\n", info.text_start);
-    write(STDOUT_FILENO, section_line, strlen(section_line));
-    
-    for (uint32_t i = 0; i < text_words; i++) {
-        instruction_print(text_data[i], info.text_start + i * WORD_SIZE, 1);
-    }
-    
-    /* Print .data section header */
-    snprintf(section_line, sizeof(section_line), "          │ .data @0x%06X\n", info.data_start);
-    write(STDOUT_FILENO, section_line, strlen(section_line));
-    
-    LOG_DEBUG(LOG_COMPONENT_LOADER, "Data segment:");
-    for (uint32_t i = 0; i < data_words; i++) {
-        char line[256];
-        snprintf(line, sizeof(line), "          │ 0x%06X: [%08X] %d\n",
-                 info.data_start + i * WORD_SIZE, 
-                 data_values[i], 
-                 (int32_t)data_values[i]);
-        write(STDOUT_FILENO, line, strlen(line));
+    /* Print program disassembly - only in DEBUG mode */
+    if (log_get_level() <= LOG_LEVEL_DEBUG) {
+        LOG_DEBUG(LOG_COMPONENT_LOADER, "Program disassembly:");
+        
+        /* Print .text section header */
+        char section_line[256];
+        snprintf(section_line, sizeof(section_line), "          │ .text @0x%06X\n", info.text_start);
+        write(STDOUT_FILENO, section_line, strlen(section_line));
+        
+        for (uint32_t i = 0; i < text_words; i++) {
+            instruction_print(text_data[i], info.text_start + i * WORD_SIZE);
+        }
+        
+        /* Print .data section header */
+        snprintf(section_line, sizeof(section_line), "          │ .data @0x%06X\n", info.data_start);
+        write(STDOUT_FILENO, section_line, strlen(section_line));
+        
+        LOG_DEBUG(LOG_COMPONENT_LOADER, "Data segment:");
+        for (uint32_t i = 0; i < data_words; i++) {
+            char line[256];
+            snprintf(line, sizeof(line), "          │ 0x%06X: [%08X] %d\n",
+                     info.data_start + i * WORD_SIZE, 
+                     data_values[i], 
+                     (int32_t)data_values[i]);
+            write(STDOUT_FILENO, line, strlen(line));
+        }
     }
     
     /* Cleanup temporary arrays */

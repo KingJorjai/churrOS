@@ -145,6 +145,9 @@ void physical_memory_dump(PhysicalMemory* mem, uint32_t start_addr, uint32_t num
     
     LOG_DEBUG(LOG_COMPONENT_MEMORY, "Memory dump 0x%06X - 0x%06X:", start_addr, start_addr + num_words * WORD_SIZE);
     
+    /* Only dump details in DEBUG level */
+    if (log_get_level() > LOG_LEVEL_DEBUG) return;
+    
     char line[256];
     for (uint32_t i = 0; i < num_words; i++) {
         uint32_t addr = start_addr + i * WORD_SIZE;
