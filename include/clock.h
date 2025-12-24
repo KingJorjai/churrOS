@@ -35,6 +35,9 @@ unsigned long clock_wait_tick(unsigned long *last);
 /* Obtener el tick actual del reloj (seguro para hilos). */
 unsigned long clock_get_tick(void);
 
+/* Wake up all threads waiting on clock (used when stopping kernel). */
+void clock_shutdown(void);
+
 #ifdef __cplusplus
 }
 #endif

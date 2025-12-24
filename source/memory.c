@@ -48,6 +48,11 @@ PhysicalMemory* physical_memory_create(void)
     
     pthread_mutex_init(&mem->mutex, NULL);
     
+    /* Initialize statistics */
+    mem->allocations = 0;
+    mem->frees = 0;
+    mem->peak_usage = 0;
+    
     LOG_INFO(LOG_COMPONENT_MEMORY,
            "Created: %u MB total, %u KB kernel reserved",
            ADDR_SPACE_SIZE / (1024*1024), KERNEL_SIZE / 1024);
@@ -84,9 +89,9 @@ uint32_t physical_memory_allocate_frame(PhysicalMemory* mem)
             mem->frame_bitmap[byte_idx] |= (1 << bit_idx);
             mem->allocations++;
             
-            /* Calculate current usage for peak tracking */
+            /* Calculate current user frame usage for peak tracking (exclude kernel frames) */
             uint32_t current_usage = 0;
-            for (uint32_t j = 0; j < mem->num_frames; j++) {
+            for (uint32_t j = mem->kernel_end_frame; j < mem->num_frames; j++) {
                 if (mem->frame_bitmap[j/8] & (1 << (j%8))) current_usage++;
             }
             if (current_usage > mem->peak_usage) mem->peak_usage = current_usage;
@@ -191,22 +196,21 @@ void physical_memory_print_stats(PhysicalMemory* mem)
 {
     if (!mem) return;
     
-    /* Calculate current usage */
-    uint32_t used_frames = 0;
-    for (uint32_t i = 0; i < mem->num_frames; i++) {
-        if (mem->frame_bitmap[i/8] & (1 << (i%8))) used_frames++;
+    /* Calculate current usage (only count user frames, not kernel) */
+    uint32_t user_frames = 0;
+    for (uint32_t i = mem->kernel_end_frame; i < mem->num_frames; i++) {
+        if (mem->frame_bitmap[i/8] & (1 << (i%8))) user_frames++;
     }
     
-    uint32_t user_frames = used_frames - mem->kernel_end_frame;
     uint32_t total_user = mem->num_frames - mem->kernel_end_frame;
     float usage_pct = (float)user_frames * 100.0f / total_user;
-    float peak_pct = (float)(mem->peak_usage - mem->kernel_end_frame) * 100.0f / total_user;
+    float peak_pct = (float)mem->peak_usage * 100.0f / total_user;
     
     if (log_get_level() <= LOG_LEVEL_INFO) {
         char line[256];
         snprintf(line, sizeof(line), "          │ Memory: %u/%u user frames (%.1f%%), peak: %u (%.1f%%)\n",
                 user_frames, total_user, usage_pct, 
-                mem->peak_usage - mem->kernel_end_frame, peak_pct);
+                mem->peak_usage, peak_pct);
         write(STDOUT_FILENO, line, strlen(line));
         snprintf(line, sizeof(line), "          │   Allocations: %lu, Frees: %lu\n",
                 (unsigned long)mem->allocations, (unsigned long)mem->frees);
@@ -215,7 +219,7 @@ void physical_memory_print_stats(PhysicalMemory* mem)
         LOG_NOTICE(LOG_COMPONENT_MEMORY, 
                    "Memory: %u/%u frames (%.1f%%), peak: %u (%.1f%%)",
                    user_frames, total_user, usage_pct, 
-                   mem->peak_usage - mem->kernel_end_frame, peak_pct);
+                   mem->peak_usage, peak_pct);
     }
 }
 

@@ -57,3 +57,9 @@ unsigned long clock_get_tick(void)
     
     return tick;
 }
+void clock_shutdown(void)
+{
+    pthread_mutex_lock(&clock_mutex);
+    pthread_cond_broadcast(&clock_cond);
+    pthread_mutex_unlock(&clock_mutex);
+}

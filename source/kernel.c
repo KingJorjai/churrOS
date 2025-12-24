@@ -205,7 +205,9 @@ void kernel_stop(Kernel* kernel)
 
     LOG_NOTICE(LOG_COMPONENT_KERNEL, "Deteniendo Kernel");
 
+    /* Wake up all threads waiting on timer and clock */
     churros_timer_wake(kernel->procgen_timer);
+    clock_shutdown();
     
     /* Despertar al scheduler para que pueda terminar */
     pthread_cond_broadcast(&kernel->scheduler_cond);
@@ -284,8 +286,11 @@ static void* timer_monitor_thread(void* arg, Timer* timer, const char* name, int
     unsigned long last_tick = 0;
     uint32_t interrupt_count = 0;
 
-    while (kernel->running) {
+    while (kernel_is_running(kernel)) {
         clock_wait_tick(&last_tick);
+        
+        if (!kernel_is_running(kernel))
+            break;
         
         uint32_t total = churros_timer_get_generated(timer);
         while (total > interrupt_count) {
