@@ -102,6 +102,9 @@ void log_set_timestamps_enabled(int enabled);
 /* Enable/disable component filtering */
 void log_set_component_filter(LogComponent component, int enabled);
 
+/* Print help about log levels */
+void log_print_level_help(void);
+
 /* ============================================
  * CORE LOGGING FUNCTIONS
  * ============================================ */

@@ -91,6 +91,11 @@ Kernel* kernel_create(KernelConfig* config)
     kernel->running = 0;
     kernel->next_pid = 1;
     
+    /* Initialize statistics */
+    kernel->context_switches = 0;
+    kernel->processes_completed = 0;
+    pthread_mutex_init(&kernel->stats_mutex, NULL);
+    
     g_kernel = kernel;
     
     return kernel;
@@ -116,6 +121,7 @@ void kernel_destroy(Kernel* kernel)
     pthread_mutex_destroy(&kernel->running_mutex);
     pthread_mutex_destroy(&kernel->pid_mutex);
     pthread_mutex_destroy(&kernel->scheduler_mutex);
+    pthread_mutex_destroy(&kernel->stats_mutex);
     pthread_cond_destroy(&kernel->scheduler_cond);
     
     g_kernel = NULL;

@@ -70,6 +70,11 @@ struct Kernel {
     
     uint32_t next_pid;
     pthread_mutex_t pid_mutex;
+    
+    /* Statistics */
+    uint64_t context_switches;
+    uint64_t processes_completed;
+    pthread_mutex_t stats_mutex;
 };
 
 /* Crear e inicializar el kernel con la configuración dada */

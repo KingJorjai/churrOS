@@ -82,6 +82,15 @@ uint32_t physical_memory_allocate_frame(PhysicalMemory* mem)
         if (!(mem->frame_bitmap[byte_idx] & (1 << bit_idx))) {
             /* Frame is free, allocate it */
             mem->frame_bitmap[byte_idx] |= (1 << bit_idx);
+            mem->allocations++;
+            
+            /* Calculate current usage for peak tracking */
+            uint32_t current_usage = 0;
+            for (uint32_t j = 0; j < mem->num_frames; j++) {
+                if (mem->frame_bitmap[j/8] & (1 << (j%8))) current_usage++;
+            }
+            if (current_usage > mem->peak_usage) mem->peak_usage = current_usage;
+            
             pthread_mutex_unlock(&mem->mutex);
             return i;
         }
@@ -104,6 +113,7 @@ void physical_memory_free_frame(PhysicalMemory* mem, uint32_t frame_num)
     uint32_t byte_idx = frame_num / 8;
     uint32_t bit_idx = frame_num % 8;
     mem->frame_bitmap[byte_idx] &= ~(1 << bit_idx);
+    mem->frees++;
     pthread_mutex_unlock(&mem->mutex);
     
     LOG_DEBUG(LOG_COMPONENT_MEMORY, "Frame freed: PFN=%u (physical addr 0x%06X)", frame_num, frame_num * PAGE_SIZE);
@@ -177,6 +187,46 @@ void physical_memory_dump(PhysicalMemory* mem, uint32_t start_addr, uint32_t num
     }
 }
 
+void physical_memory_print_stats(PhysicalMemory* mem)
+{
+    if (!mem) return;
+    
+    /* Calculate current usage */
+    uint32_t used_frames = 0;
+    for (uint32_t i = 0; i < mem->num_frames; i++) {
+        if (mem->frame_bitmap[i/8] & (1 << (i%8))) used_frames++;
+    }
+    
+    uint32_t user_frames = used_frames - mem->kernel_end_frame;
+    uint32_t total_user = mem->num_frames - mem->kernel_end_frame;
+    float usage_pct = (float)user_frames * 100.0f / total_user;
+    float peak_pct = (float)(mem->peak_usage - mem->kernel_end_frame) * 100.0f / total_user;
+    
+    LOG_NOTICE(LOG_COMPONENT_MEMORY, 
+               "Memory: %u/%u user frames (%.1f%%), peak: %u (%.1f%%)",
+               user_frames, total_user, usage_pct, 
+               mem->peak_usage - mem->kernel_end_frame, peak_pct);
+    LOG_INFO(LOG_COMPONENT_MEMORY, 
+             "  Allocations: %lu, Frees: %lu",
+             (unsigned long)mem->allocations, (unsigned long)mem->frees);
+}
+
+void mmu_print_tlb_stats(MMU* mmu)
+{
+    if (!mmu) return;
+    
+    uint64_t total = mmu->tlb.hits + mmu->tlb.misses;
+    if (total == 0) {
+        LOG_INFO(LOG_COMPONENT_MMU, "TLB: No accesses recorded");
+        return;
+    }
+    
+    float hit_rate = (float)mmu->tlb.hits * 100.0f / total;
+    LOG_NOTICE(LOG_COMPONENT_MMU, 
+               "TLB: %lu hits, %lu misses (%.1f%% hit rate)",
+               (unsigned long)mmu->tlb.hits, (unsigned long)mmu->tlb.misses, hit_rate);
+}
+
 /* ============================================
  * MMU IMPLEMENTATION
  * ============================================ */
@@ -229,6 +279,8 @@ void mmu_reset(MMU* mmu)
     
     /* Invalidate TLB */
     mmu_tlb_flush(mmu);
+    mmu->tlb.hits = 0;
+    mmu->tlb.misses = 0;
 }
 
 void mmu_set_ptbr(MMU* mmu, uint32_t ptbr)
@@ -265,6 +317,7 @@ uint32_t mmu_translate(MMU* mmu, PhysicalMemory* mem, uint32_t virtual_addr, int
             /* TLB hit */
             uint32_t pfn = mmu->tlb.entries[i].pfn;
             uint32_t physical_addr = (pfn << PAGE_BITS) | offset;
+            mmu->tlb.hits++;
             LOG_DEBUG(LOG_COMPONENT_MMU, "TLB HIT: VPN=%u -> PFN=%u (vaddr=0x%06X -> paddr=0x%06X) %s",
                      vpn, pfn, virtual_addr, physical_addr, is_write ? "[WRITE]" : "[READ]");
             return physical_addr;
@@ -272,6 +325,7 @@ uint32_t mmu_translate(MMU* mmu, PhysicalMemory* mem, uint32_t virtual_addr, int
     }
     
     /* 2. TLB miss - walk page table */
+    mmu->tlb.misses++;
     LOG_DEBUG(LOG_COMPONENT_MMU, "TLB MISS: VPN=%u (vaddr=0x%06X) - walking page table at PTBR=0x%06X",
              vpn, virtual_addr, mmu->ptbr);
     

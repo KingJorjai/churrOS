@@ -33,6 +33,7 @@ void print_usage(const char* program_name)
     printf("  -s NUM     Velocidad del reloj en ms (default: 100)\n");
     printf("  -d NUM     Duración de la simulación en ticks (0=infinito, default: 100)\n");
     printf("  -l LEVEL   Nivel mínimo de log: debug, info, notice, warn, error, critical (default: info)\n");
+    printf("             Use '-l help' para más información sobre los niveles\n");
     printf("  --no-color Deshabilitar colores en logs\n");
     printf("  --no-loc   Ocultar ubicación (cpu:core:thread) en logs\n");
     printf("  -h         Mostrar esta ayuda\n");
@@ -106,7 +107,10 @@ int main(int argc, char* argv[])
             case 's': config.clock_speed_ms = parse_positive_arg(optarg, "La velocidad del reloj"); break;
             case 'd': config.simulation_duration = atoi(optarg); break;
             case 'l':
-                if (strcmp(optarg, "debug") == 0) {
+                if (strcmp(optarg, "help") == 0) {
+                    log_print_level_help();
+                    return 0;
+                } else if (strcmp(optarg, "debug") == 0) {
                     log_set_level(LOG_LEVEL_DEBUG);
                 } else if (strcmp(optarg, "info") == 0) {
                     log_set_level(LOG_LEVEL_INFO);
@@ -120,7 +124,7 @@ int main(int argc, char* argv[])
                     log_set_level(LOG_LEVEL_CRITICAL);
                 } else {
                     fprintf(stderr, "Error: Nivel de log '%s' no reconocido\n", optarg);
-                    fprintf(stderr, "Use: debug, info, notice, warn, error, critical\n");
+                    fprintf(stderr, "Use: debug, info, notice, warn, error, critical (o 'help' para más información)\n");
                     return 1;
                 }
                 break;
@@ -145,14 +149,46 @@ int main(int argc, char* argv[])
     
     pthread_join(main_kernel->clock_thread, NULL);
     
+    LOG_SEPARATOR();
     LOG_INFO(LOG_COMPONENT_KERNEL, "Estadísticas Finales");
     if (log_get_level() <= LOG_LEVEL_INFO) {
         char line[256];
         snprintf(line, sizeof(line), "          │ Procesos totales generados: %u\n", main_kernel->next_pid - 1);
         write(STDOUT_FILENO, line, strlen(line));
+        snprintf(line, sizeof(line), "          │ Procesos completados: %lu\n", 
+                (unsigned long)main_kernel->processes_completed);
+        write(STDOUT_FILENO, line, strlen(line));
         snprintf(line, sizeof(line), "          │ Procesos en cola: %u\n", process_queue_size(main_kernel->process_queue));
         write(STDOUT_FILENO, line, strlen(line));
+        snprintf(line, sizeof(line), "          │ Cambios de contexto: %lu\n",
+                (unsigned long)main_kernel->context_switches);
+        write(STDOUT_FILENO, line, strlen(line));
     }
+    
+    /* Print memory and TLB statistics */
+    physical_memory_print_stats(main_kernel->physical_memory);
+    
+    /* Print TLB stats for each HW thread */
+    Machine* m = main_kernel->machine;
+    for (uint32_t i = 0; i < m->num_cpus && log_get_level() <= LOG_LEVEL_NOTICE; i++) {
+        CPU* cpu = &m->cpus[i];
+        for (uint32_t j = 0; j < cpu->num_cores; j++) {
+            Core* core = &cpu->cores[j];
+            for (uint32_t k = 0; k < core->num_hw_threads; k++) {
+                HWThread* thread = &core->hw_threads[k];
+                if (thread->mmu->tlb.hits + thread->mmu->tlb.misses > 0) {
+                    if (log_get_level() <= LOG_LEVEL_INFO) {
+                        char line[256];
+                        snprintf(line, sizeof(line), "          │ CPU %u Core %u Thread %u:\n", i, j, k);
+                        write(STDOUT_FILENO, line, strlen(line));
+                    }
+                    mmu_print_tlb_stats(thread->mmu);
+                }
+            }
+        }
+    }
+    
+    LOG_SEPARATOR();
     machine_print_status(main_kernel->machine);
     kernel_destroy(main_kernel);
     

@@ -66,6 +66,9 @@ typedef struct {
 typedef struct {
     TLBEntry entries[TLB_SIZE];
     uint32_t next_replace;  /* For round-robin replacement */
+    /* Statistics */
+    uint64_t hits;
+    uint64_t misses;
 } TLB;
 
 /* Memory Management Unit (one per HW thread) */
@@ -85,6 +88,10 @@ typedef struct {
     uint32_t num_frames;                /* Total number of frames */
     uint32_t kernel_end_frame;          /* First frame after kernel space */
     pthread_mutex_t mutex;              /* Protection for concurrent access */
+    /* Statistics */
+    uint64_t allocations;
+    uint64_t frees;
+    uint32_t peak_usage;
 } PhysicalMemory;
 
 /* ============================================
@@ -99,6 +106,7 @@ void physical_memory_free_frame(PhysicalMemory* mem, uint32_t frame_num);
 uint32_t physical_memory_read_word(PhysicalMemory* mem, uint32_t physical_addr);
 void physical_memory_write_word(PhysicalMemory* mem, uint32_t physical_addr, uint32_t value);
 void physical_memory_dump(PhysicalMemory* mem, uint32_t start_addr, uint32_t num_words);
+void physical_memory_print_stats(PhysicalMemory* mem);
 
 /* MMU Management */
 MMU* mmu_create(void);
@@ -107,6 +115,7 @@ void mmu_reset(MMU* mmu);
 void mmu_set_ptbr(MMU* mmu, uint32_t ptbr);
 uint32_t mmu_translate(MMU* mmu, PhysicalMemory* mem, uint32_t virtual_addr, int is_write);
 void mmu_tlb_flush(MMU* mmu);
+void mmu_print_tlb_stats(MMU* mmu);
 
 /* Page Table Management */
 PageTable* page_table_create(PhysicalMemory* mem);

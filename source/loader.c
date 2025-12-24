@@ -117,7 +117,7 @@ PCB* loader_load_program(const char* filename, PhysicalMemory* mem, uint32_t* ne
         return NULL;
     }
     
-    LOG_INFO(LOG_COMPONENT_LOADER, "Loading program %s (PID=%u)", filename, *next_pid);
+    LOG_NOTICE(LOG_COMPONENT_LOADER, "Loading program %s (PID=%u)", filename, *next_pid);
     
     /* Create PCB */
     PCB* pcb = (PCB*)malloc(sizeof(PCB));
@@ -225,7 +225,7 @@ PCB* loader_load_program(const char* filename, PhysicalMemory* mem, uint32_t* ne
     
     pcb->is_loaded = 1;
     
-    LOG_INFO(LOG_COMPONENT_LOADER, 
+    LOG_DEBUG(LOG_COMPONENT_LOADER, 
            "Program loaded successfully (PID=%u, PTBR=0x%06X)", pcb->pid, pcb->mm.pgb);
     
     /* Print program disassembly - only in DEBUG mode */

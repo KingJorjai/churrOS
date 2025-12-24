@@ -255,6 +255,19 @@ void log_message_at(LogLevel level, LogComponent component,
  * LEGACY COMPATIBILITY (deprecated)
  * ============================================ */
 
+void log_print_level_help(void)
+{
+    const char* help = 
+        "Niveles de log disponibles:\n"
+        "  debug    - Información muy detallada (TLB hits/misses, instrucciones, etc.)\n"
+        "  info     - Información general (carga de procesos, inicio de componentes)\n"
+        "  notice   - Eventos importantes (inicio/fin de procesos, límites alcanzados)\n"
+        "  warn     - Advertencias (intentos de liberar frames del kernel, etc.)\n"
+        "  error    - Errores (memoria agotada, fallos de traducción)\n"
+        "  critical - Errores críticos (fallos al crear hilos, kernel exhausto)\n";
+    write(STDOUT_FILENO, help, strlen(help));
+}
+
 void logging_log(const char* color, const char* tag, const char* fmt, ...)
 {
     (void)color;  /* Ignore legacy color */

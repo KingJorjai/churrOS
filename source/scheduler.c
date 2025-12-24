@@ -82,6 +82,11 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
             if (next) {
                 pcb_destroy(current); /* Destruir IDLE */
                 scheduler_dispatch(thread, next, cpu, core, hw_thread);
+                
+                pthread_mutex_lock(&kernel->stats_mutex);
+                kernel->context_switches++;
+                pthread_mutex_unlock(&kernel->stats_mutex);
+                
                 LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
                        "Dispatch PID=%u (Reemplazando IDLE) TTL=%u",
                        next->pid, next->ttl);
@@ -97,11 +102,22 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
         LOG_AT_NOTICE(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
                "Proceso PID=%u terminado", current->pid);
         current->state = PROCESS_STATE_TERMINATED;
+        
+        /* Increment completed processes counter */
+        pthread_mutex_lock(&kernel->stats_mutex);
+        kernel->processes_completed++;
+        pthread_mutex_unlock(&kernel->stats_mutex);
+        
         pcb_destroy(current);
 
         if (!process_queue_is_empty(kernel->process_queue)) {
             PCB* next = process_queue_dequeue(kernel->process_queue);
             scheduler_dispatch(thread, next, cpu, core, hw_thread);
+            
+            pthread_mutex_lock(&kernel->stats_mutex);
+            kernel->context_switches++;
+            pthread_mutex_unlock(&kernel->stats_mutex);
+            
             LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
                    "Dispatch PID=%u TTL=%u", next->pid, next->ttl);
         } else {
@@ -126,6 +142,11 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
                 /* Despachar siguiente */
                 PCB* next = process_queue_dequeue(kernel->process_queue);
                 scheduler_dispatch(thread, next, cpu, core, hw_thread);
+                
+                pthread_mutex_lock(&kernel->stats_mutex);
+                kernel->context_switches++;
+                pthread_mutex_unlock(&kernel->stats_mutex);
+                
                 LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
                        "Preemption PID=%u -> PID=%u", current->pid, next->pid);
             }
@@ -153,6 +174,10 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
                 /* Despachar siguiente proceso */
                 PCB* next = process_queue_dequeue(kernel->process_queue);
                 scheduler_dispatch(thread, next, cpu, core, hw_thread);
+                
+                pthread_mutex_lock(&kernel->stats_mutex);
+                kernel->context_switches++;
+                pthread_mutex_unlock(&kernel->stats_mutex);
                 
                 /* Los procesos en espera se enfrían */
                 uint32_t queue_size = process_queue_size(kernel->process_queue);
