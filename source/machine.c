@@ -173,6 +173,25 @@ void machine_advance_cycle(Machine* machine, Kernel* kernel)
                             /* EXIT instruction - program terminated */
                             LOG_AT_NOTICE(LOG_COMPONENT_MACHINE, i, j, k,
                                    "PID=%u executed EXIT instruction", pcb->pid);
+                            
+                            /* Dump data segment after execution */
+                            if (pcb->is_loaded && pcb->mm.data_size > 0) {
+                                LOG_AT_DEBUG(LOG_COMPONENT_LOADER, i, j, k, "Data segment after execution:");
+                                uint32_t data_vpn = GET_VPN(pcb->mm.data_start);
+                                
+                                /* Access the page table to get physical address */
+                                uint32_t pte_addr = pcb->mm.pgb + data_vpn * sizeof(PageTableEntry);
+                                uint32_t pte_data = physical_memory_read_word(kernel->physical_memory, pte_addr);
+                                PageTableEntry pte;
+                                memcpy(&pte, &pte_data, sizeof(PageTableEntry));
+                                
+                                if (pte.valid && pte.present) {
+                                    uint32_t data_start_phys = (pte.pfn << PAGE_BITS) | GET_OFFSET(pcb->mm.data_start);
+                                    physical_memory_dump(kernel->physical_memory, data_start_phys, 
+                                                        pcb->mm.data_size / WORD_SIZE);
+                                }
+                            }
+                            
                             pcb->state = PROCESS_STATE_TERMINATED;
                             process_terminated_detected = 1;
                         }

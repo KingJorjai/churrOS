@@ -225,9 +225,20 @@ PCB* loader_load_program(const char* filename, PhysicalMemory* mem, uint32_t* ne
     
     /* Print program disassembly */
     LOG_DEBUG(LOG_COMPONENT_LOADER, "Program disassembly:");
+    
+    /* Print .text section header */
+    char section_line[256];
+    snprintf(section_line, sizeof(section_line), "          │ .text @0x%06X\n", info.text_start);
+    write(STDOUT_FILENO, section_line, strlen(section_line));
+    
     for (uint32_t i = 0; i < text_words; i++) {
         instruction_print(text_data[i], info.text_start + i * WORD_SIZE, 1);
     }
+    
+    /* Print .data section header */
+    snprintf(section_line, sizeof(section_line), "          │ .data @0x%06X\n", info.data_start);
+    write(STDOUT_FILENO, section_line, strlen(section_line));
+    
     LOG_DEBUG(LOG_COMPONENT_LOADER, "Data segment:");
     for (uint32_t i = 0; i < data_words; i++) {
         char line[256];
