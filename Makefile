@@ -8,6 +8,8 @@ SRC_DIR := source
 BUILD_DIR := build
 INCLUDE_DIR := include
 TEST_DIR := tests
+PROMETHEUS_DIR := prometheus
+ELF_DIR := elfs
 
 # Fuentes del kernel
 KERNEL_SOURCES := $(SRC_DIR)/clock.c \
@@ -29,6 +31,13 @@ KERNEL_OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(KERNEL_SOURCES))
 # Ejecutable principal
 KERNEL_BIN := $(BUILD_DIR)/churros
 
+# Prometheus
+PROMETHEUS_BIN := $(BUILD_DIR)/prometheus
+PROMETHEUS_SRC := $(PROMETHEUS_DIR)/prometheus.c
+PROMETHEUS_FLAGS := -I$(PROMETHEUS_DIR)
+# Semilla fija para reproducibilidad entre instancias del repositorio
+PROMETHEUS_SEED := 42
+
 # Biblioteca (para tests)
 LIB_SOURCES := $(SRC_DIR)/clock.c \
                $(SRC_DIR)/timer.c \
@@ -47,7 +56,7 @@ LIB := $(BUILD_DIR)/libchurros.a
 TEST_SRC := $(TEST_DIR)/test_clock.c
 TEST_BIN := $(BUILD_DIR)/test_clock
 
-.PHONY: all clean test run-test run
+.PHONY: all clean test run-test run prometheus elfs clean-elfs
 
 all: $(KERNEL_BIN)
 
@@ -67,6 +76,22 @@ $(BUILD_DIR)/lib_%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 $(KERNEL_BIN): $(KERNEL_OBJECTS)
 	$(CC) $(CFLAGS) $(KERNEL_OBJECTS) $(LDFLAGS) -o $(KERNEL_BIN)
 	@echo "Kernel compilado exitosamente: $(KERNEL_BIN)"
+
+# Compilar prometheus
+$(PROMETHEUS_BIN): $(PROMETHEUS_SRC) | $(BUILD_DIR)
+	$(CC) -Wall -ggdb $(PROMETHEUS_FLAGS) $(PROMETHEUS_SRC) -o $(PROMETHEUS_BIN)
+	@echo "Prometheus compilado exitosamente: $(PROMETHEUS_BIN)"
+
+# Target para compilar prometheus
+prometheus: $(PROMETHEUS_BIN)
+
+# Target para generar archivos .elf
+# Usa semilla fija ($(PROMETHEUS_SEED)) para garantizar reproducibilidad
+elfs: $(PROMETHEUS_BIN)
+	@mkdir -p $(ELF_DIR)
+	@echo "Generando archivos .elf con semilla $(PROMETHEUS_SEED)..."
+	@cd $(ELF_DIR) && ../$(PROMETHEUS_BIN) -s $(PROMETHEUS_SEED) -nprog -f0 -l20 -p60
+	@echo "Archivos .elf generados en $(ELF_DIR)/"
 
 # Crear biblioteca estática (para tests)
 $(LIB): $(LIB_OBJECTS)
@@ -92,3 +117,6 @@ run: $(KERNEL_BIN)
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+clean-elfs:
+	rm -rf $(ELF_DIR)

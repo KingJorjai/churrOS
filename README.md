@@ -41,11 +41,20 @@ El sistema está organizado en una arquitectura modular con sincronización basa
 # Compilar el kernel completo
 make
 
+# Compilar prometheus (generador de archivos .elf)
+make prometheus
+
+# Generar archivos .elf de prueba
+make elfs
+
 # Compilar tests
 make test
 
 # Limpiar archivos generados
 make clean
+
+# Limpiar archivos .elf generados
+make clean-elfs
 ```
 
 ## Ejecución
@@ -114,7 +123,12 @@ churrOS/
 │   ├── logging.c
 │   ├── kernel.c
 │   └── main.c
+├── prometheus/       # Generador de programas .elf
+│   ├── defines.h
+│   ├── prometheus.c
+│   └── Makefile
 ├── build/            # Archivos compilados
+├── elfs/             # Archivos .elf generados (gitignored)
 ├── run_tests.sh      # ← Nuevo: Suite de tests automatizados
 ├── Makefile
 ├── LICENSE
@@ -255,6 +269,57 @@ El proyecto incluye una suite completa de tests automatizados:
   - ✅ Instruction set (LD, ST, ADD, EXIT) implementado
   - ✅ Motor de ejecución con traducción virtual→física
   - ✅ Programas de ejemplo funcionando
+  - ✅ **Prometheus**: Generador de archivos .elf de prueba
+
+## Prometheus - Generador de Programas
+
+Prometheus es una herramienta integrada que genera archivos `.elf` de prueba para simular programas en churrOS. Crea programas aleatorios con instrucciones LD, ST, ADD y EXIT.
+
+### Uso de Prometheus
+
+```bash
+# Generar archivos .elf con configuración por defecto
+# (60 archivos: prog000.elf a prog059.elf en el directorio elfs/)
+# Nota: Usa semilla fija (42) para garantizar reproducibilidad
+make elfs
+
+# Compilar prometheus sin generar archivos
+make prometheus
+
+# Ejecutar prometheus manualmente con opciones personalizadas
+./build/prometheus -s 0 -nprog -f0 -l20 -p60
+```
+
+### Opciones de Prometheus
+
+- `-s, --seed=N`: Semilla para números aleatorios (default: 0)
+- `-n, --name=SSS`: Prefijo del nombre de los programas (default: "prog")
+- `-f, --first=NNN`: Primer número del archivo (default: 0)
+- `-l, --lines=NNN`: Número aproximado de líneas de código (default: 20)
+- `-p, --programs=NNN`: Cantidad de programas a generar (default: 50)
+- `-h, --help`: Mostrar ayuda
+
+### Ejemplos de Uso
+
+```bash
+# Generar 100 programas pequeños
+./build/prometheus -s 3 -ntest -f0 -l10 -p100
+
+# Generar un programa grande para testing
+./build/prometheus -s 9 -nbig -f0 -l1000 -p1
+
+# Generar programas con diferente semilla
+./build/prometheus -s 42 -nprog -f100 -l50 -p20
+```
+
+### Formato de Archivos .elf
+
+Los archivos generados contienen:
+- Sección `.text` con código ejecutable (instrucciones)
+- Sección `.data` con datos inicializados
+- Instrucciones: LD (load), ST (store), ADD (suma), EXIT (finalizar)
+
+**Nota sobre reproducibilidad**: El comando `make elfs` usa una semilla fija (42) para garantizar que todos los desarrolladores generen los mismos archivos .elf, facilitando la depuración y pruebas colaborativas.
 
 ## Futuras Mejoras
 
