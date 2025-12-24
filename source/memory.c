@@ -105,6 +105,8 @@ void physical_memory_free_frame(PhysicalMemory* mem, uint32_t frame_num)
     uint32_t bit_idx = frame_num % 8;
     mem->frame_bitmap[byte_idx] &= ~(1 << bit_idx);
     pthread_mutex_unlock(&mem->mutex);
+    
+    LOG_DEBUG(LOG_COMPONENT_MEMORY, "Frame freed: PFN=%u (physical addr 0x%06X)", frame_num, frame_num * PAGE_SIZE);
 }
 
 uint32_t physical_memory_read_word(PhysicalMemory* mem, uint32_t physical_addr)
@@ -240,6 +242,8 @@ void mmu_tlb_flush(MMU* mmu)
 {
     if (!mmu) return;
     
+    LOG_DEBUG(LOG_COMPONENT_MMU, "TLB flush: invalidating all %d entries", TLB_SIZE);
+    
     for (int i = 0; i < TLB_SIZE; i++) {
         mmu->tlb.entries[i].valid = 0;
         mmu->tlb.entries[i].vpn = 0;
@@ -261,11 +265,16 @@ uint32_t mmu_translate(MMU* mmu, PhysicalMemory* mem, uint32_t virtual_addr, int
             /* TLB hit */
             uint32_t pfn = mmu->tlb.entries[i].pfn;
             uint32_t physical_addr = (pfn << PAGE_BITS) | offset;
+            LOG_DEBUG(LOG_COMPONENT_MMU, "TLB HIT: VPN=%u -> PFN=%u (vaddr=0x%06X -> paddr=0x%06X) %s",
+                     vpn, pfn, virtual_addr, physical_addr, is_write ? "[WRITE]" : "[READ]");
             return physical_addr;
         }
     }
     
     /* 2. TLB miss - walk page table */
+    LOG_DEBUG(LOG_COMPONENT_MMU, "TLB MISS: VPN=%u (vaddr=0x%06X) - walking page table at PTBR=0x%06X",
+             vpn, virtual_addr, mmu->ptbr);
+    
     /* Page table is stored in physical memory at PTBR */
     uint32_t pte_addr = mmu->ptbr + vpn * sizeof(PageTableEntry);
     
@@ -275,28 +284,43 @@ uint32_t mmu_translate(MMU* mmu, PhysicalMemory* mem, uint32_t virtual_addr, int
     pte_unpack(&pte, pte_data);
     
     if (!pte.valid || !pte.present) {
-        LOG_ERROR(LOG_COMPONENT_MMU, "Page fault at virtual address 0x%06X (VPN=%u)", virtual_addr, vpn);
+        LOG_ERROR(LOG_COMPONENT_MMU, "PAGE FAULT: VPN=%u at vaddr=0x%06X (valid=%d, present=%d)",
+                 vpn, virtual_addr, pte.valid, pte.present);
         return 0xFFFFFFFF;
     }
     
     /* 3. Update TLB (round-robin replacement) */
     uint32_t tlb_idx = mmu->tlb.next_replace;
+    LOG_DEBUG(LOG_COMPONENT_MMU, "TLB UPDATE: Adding VPN=%u -> PFN=%u to TLB[%u]",
+             vpn, pte.pfn, tlb_idx);
     mmu->tlb.entries[tlb_idx].valid = 1;
     mmu->tlb.entries[tlb_idx].vpn = vpn;
     mmu->tlb.entries[tlb_idx].pfn = pte.pfn;
     mmu->tlb.next_replace = (mmu->tlb.next_replace + 1) % TLB_SIZE;
     
     /* 4. Mark accessed (and dirty if write) */
-    if (is_write) {
+    int bits_updated = 0;
+    if (is_write && !pte.dirty) {
         pte.dirty = 1;
+        bits_updated = 1;
+        LOG_DEBUG(LOG_COMPONENT_MMU, "Page marked DIRTY: VPN=%u PFN=%u", vpn, pte.pfn);
     }
-    pte.accessed = 1;
-    pte_data = pte_pack(&pte);
-    physical_memory_write_word(mem, pte_addr, pte_data);
+    if (!pte.accessed) {
+        pte.accessed = 1;
+        bits_updated = 1;
+        LOG_DEBUG(LOG_COMPONENT_MMU, "Page marked ACCESSED: VPN=%u PFN=%u", vpn, pte.pfn);
+    }
+    
+    if (bits_updated) {
+        pte_data = pte_pack(&pte);
+        physical_memory_write_word(mem, pte_addr, pte_data);
+    }
     
     /* 5. Return physical address */
     uint32_t pfn = pte.pfn;
     uint32_t physical_addr = (pfn << PAGE_BITS) | offset;
+    LOG_DEBUG(LOG_COMPONENT_MMU, "Translation complete: VPN=%u -> PFN=%u (vaddr=0x%06X -> paddr=0x%06X) %s",
+             vpn, pfn, virtual_addr, physical_addr, is_write ? "[WRITE]" : "[READ]");
     
     return physical_addr;
 }
@@ -373,6 +397,9 @@ void page_table_map(PageTable* pt, PhysicalMemory* mem, uint32_t vpn, uint32_t p
     pt->entries[vpn].dirty = 0;
     pt->entries[vpn].accessed = 0;
     pt->entries[vpn].pfn = pfn;
+    
+    LOG_DEBUG(LOG_COMPONENT_MEMORY, "Page mapped: VPN=%u -> PFN=%u (vaddr=0x%06X -> paddr=0x%06X)",
+             vpn, pfn, vpn << PAGE_BITS, pfn << PAGE_BITS);
     
     /* Update in physical memory */
     uint32_t pte_addr = pt->physical_address + vpn * sizeof(PageTableEntry);
