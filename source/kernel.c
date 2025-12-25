@@ -152,7 +152,12 @@ int kernel_start(Kernel* kernel)
         
         const char* algo_name = kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN ? "Round Robin" :
                                kernel->config.scheduler_algorithm == SCHEDULER_FIFO ? "FIFO" : "Chocolate Caliente";
-        snprintf(line, sizeof(line), "          │ Algoritmo: %s (quantum=%u ticks)\n", algo_name, kernel->config.rr_quantum);
+        
+        if (kernel->config.scheduler_algorithm == SCHEDULER_CHOCOLATE_CALIENTE) {
+            snprintf(line, sizeof(line), "          │ Algoritmo: %s (Quantum base: %u ticks)\n", algo_name, kernel->config.rr_quantum);
+        } else {
+            snprintf(line, sizeof(line), "          │ Algoritmo: %s (quantum=%u ticks)\n", algo_name, kernel->config.rr_quantum);
+        }
         write(STDOUT_FILENO, line, strlen(line));
         
         snprintf(line, sizeof(line), "          │ Generación: %u ticks, Clock: %u ms, Duración: %s\n",
@@ -382,7 +387,7 @@ static void* process_generator_thread_func(void* arg)
             /* Program loaded successfully */
             pcb->state = PROCESS_STATE_READY;
             process_queue_enqueue(kernel->process_queue, pcb);
-            LOG_INFO(LOG_COMPONENT_LOADER, "Programa %s cargado: PID=%u", filename, pcb->pid);
+            LOG_INFO(LOG_COMPONENT_LOADER, "Programa %s creado: PID=%u", filename, pcb->pid);
             
             /* Dump data segment before execution */
             LOG_DEBUG(LOG_COMPONENT_LOADER, "Data segment before execution:");

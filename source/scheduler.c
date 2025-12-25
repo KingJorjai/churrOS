@@ -155,7 +155,7 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread, uint32_t cpu, uin
         /* Chocolate Caliente: Quantum adaptativo basado en temperatura */
         uint32_t max_quantum = get_max_quantum_by_temperature(current->temperature, kernel->config.rr_quantum);
         
-        LOG_AT_DEBUG(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
+        LOG_AT_INFO(LOG_COMPONENT_SCHEDULER, cpu, core, hw_thread,
                "PID=%u Temp=%u°C %s Quantum=%u Ticks=%u/%u TTL=%u",
                current->pid, current->temperature, get_temperature_emoji(current->temperature),
                max_quantum, current->ticks_since_swap, max_quantum, current->ttl);
