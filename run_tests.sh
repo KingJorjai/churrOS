@@ -321,7 +321,7 @@ echo ""
 
 if [ ${TESTS_FAILED} -eq 0 ]; then
     echo -e "${GREEN}${BOLD}╔════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}${BOLD}║  ✓ TODOS LOS TESTS PASARON CON ÉXITO  ║${NC}"
+    echo -e "${GREEN}${BOLD}║  ✓ TODOS LOS TESTS PASARON CON ÉXITO   ║${NC}"
     echo -e "${GREEN}${BOLD}╚════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${GREEN}Los algoritmos de scheduling funcionan correctamente:${NC}"
