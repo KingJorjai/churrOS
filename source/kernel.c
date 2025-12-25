@@ -212,12 +212,6 @@ void kernel_stop(Kernel* kernel)
     /* Despertar al scheduler para que pueda terminar */
     pthread_cond_broadcast(&kernel->scheduler_cond);
 
-    /* Opcional: forzar cancelación de hilos potencialmente bloqueados */
-    pthread_cancel(kernel->clock_thread);
-    pthread_cancel(kernel->procgen_timer_thread);
-    pthread_cancel(kernel->scheduler_thread);
-    pthread_cancel(kernel->process_gen_thread);
-
     pthread_join(kernel->clock_thread, NULL);
     pthread_join(kernel->procgen_timer_thread, NULL);
     pthread_join(kernel->scheduler_thread, NULL);
@@ -313,6 +307,7 @@ static int kernel_is_running(Kernel* kernel)
     if (!kernel)
         return 0;
 
+    /* Read volatile variable directly - no mutex needed for reading */
     return kernel->running;
 }
 

@@ -147,7 +147,11 @@ int main(int argc, char* argv[])
         return 1;
     }
     
+    /* Wait for all threads to finish before accessing shared resources */
     pthread_join(main_kernel->clock_thread, NULL);
+    pthread_join(main_kernel->procgen_timer_thread, NULL);
+    pthread_join(main_kernel->scheduler_thread, NULL);
+    pthread_join(main_kernel->process_gen_thread, NULL);
     
     LOG_INFO(LOG_COMPONENT_KERNEL, "Estadísticas Finales");
     if (log_get_level() <= LOG_LEVEL_INFO) {
