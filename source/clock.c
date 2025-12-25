@@ -13,12 +13,14 @@
 static pthread_mutex_t clock_mutex;
 static pthread_cond_t clock_cond;
 static unsigned long clock_tick = 0;
+static int shutdown_requested = 0;
 
 void clock_init(void)
 {
     pthread_mutex_init(&clock_mutex, NULL);
     pthread_cond_init(&clock_cond, NULL);
     clock_tick = 0;
+    shutdown_requested = 0;
 }
 
 void clock_destroy(void)
@@ -41,7 +43,7 @@ unsigned long clock_wait_tick(unsigned long *last)
         return 0;
 
     pthread_mutex_lock(&clock_mutex);
-    while (clock_tick <= *last) {
+    while (clock_tick <= *last && !shutdown_requested) {
         pthread_cond_wait(&clock_cond, &clock_mutex);
     }
     *last = clock_tick;
@@ -60,6 +62,7 @@ unsigned long clock_get_tick(void)
 void clock_shutdown(void)
 {
     pthread_mutex_lock(&clock_mutex);
+    shutdown_requested = 1;
     pthread_cond_broadcast(&clock_cond);
     pthread_mutex_unlock(&clock_mutex);
 }
