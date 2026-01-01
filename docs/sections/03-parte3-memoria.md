@@ -2,15 +2,17 @@
 
 ## Introducción
 
-La tercera parte cierra el círculo: memoria virtual completa. Sobre lo que ya teníamos (Parte 1 y 2), añadimos `memory.c/h`, `loader.c/h` e `instruction.c/h`, más un generador de programas ELF que llamamos `prometheus`.
+La tercera parte cierra el círculo: memoria virtual completa. Sobre lo que ya teníamos (Parte 1 y 2), añadimos `memory.c/h`, `loader.c/h` e `instruction.c/h`, más un generador de programas que llamamos `prometheus`.
 
 Qué implementamos:
 
-- **MMU** (Memory Management Unit) con traducción virtual→física
-- **TLB** (Translation Lookaside Buffer) de 8 entradas para cachear traducciones
+- **MMU** (Memory Management Unit) con traducción virtual $\rightarrow$ física
+- **TLB** (Translation Lookaside Buffer) de 16 entradas para cachear traducciones
 - **Paginación** de 4KB con tabla de páginas por proceso
-- **Loader** de programas ELF con asignación dinámica de frames
+- **Loader** de programas en formato texto plano con asignación dinámica de frames
 - **ISA** básico con instrucciones LOAD, STORE, ADD, EXIT
+
+**Nota sobre "ELF"**: Aunque llamamos a los archivos `.elf` y al componente "loader ELF", **NO usamos el formato binario ELF estándar**. Usamos archivos de texto plano con directivas `.text` y `.data` seguidas de instrucciones en hexadecimal. Mantuvimos el nombre ".elf" por consistencia con el enunciado, pero técnicamente es un formato custom.
 
 ## Arquitectura de Memoria
 
@@ -98,42 +100,11 @@ void physical_memory_write_word(PhysicalMemory* mem,
 
 ### Asignación de Frames
 
-La asignación busca el primer frame libre después del espacio del kernel:
-
-```c
-uint32_t physical_memory_allocate_frame(PhysicalMemory* mem) {
-    pthread_mutex_lock(&mem->mutex);
-    
-    for (uint32_t i = mem->kernel_end_frame; i < mem->num_frames; i++) {
-        uint32_t byte_idx = i / 8;
-        uint32_t bit_idx = i % 8;
-        
-        if (!(mem->frame_bitmap[byte_idx] & (1 << bit_idx))) {
-            // Frame libre, asignarlo
-            mem->frame_bitmap[byte_idx] |= (1 << bit_idx);
-            mem->allocations++;
-            
-            // Actualizar pico de uso
-            uint32_t current_usage = count_allocated_user_frames(mem);
-            if (current_usage > mem->peak_usage) {
-                mem->peak_usage = current_usage;
-            }
-            
-            pthread_mutex_unlock(&mem->mutex);
-            return i;
-        }
-    }
-    
-    pthread_mutex_unlock(&mem->mutex);
-    LOG_ERROR(LOG_COMPONENT_MEMORY,
-              "Out of physical memory!");
-    return 0xFFFFFFFF;
-}
-```
+Recorre el bitmap desde `kernel_end_frame` buscando el primer bit a 0. Lo setea a 1, actualiza contadores y devuelve el índice del frame. Si no hay frames libres devuelve 0xFFFFFFFF.
 
 ## TLB (Translation Lookaside Buffer)
 
-El TLB es una caché asociativa de 8 entradas que guarda traducciones VPN→PFN recientes. Reduce un montón los accesos a la Page Table —en nuestras pruebas vimos mejoras de 6-10x.
+El TLB es una caché asociativa de 16 entradas que guarda traducciones VPN $\rightarrow$ PFN recientes. Reduce un montón los accesos a la Page Table —en nuestras pruebas vimos mejoras de $6\times$ a $10\times$.
 
 ### Estructura
 
@@ -146,7 +117,7 @@ typedef struct {
 } TLBEntry;
 
 typedef struct {
-    TLBEntry entries[TLB_SIZE];  // 8 entradas
+    TLBEntry entries[TLB_SIZE];  // 16 entradas
     uint32_t hits;               // TLB hits
     uint32_t misses;             // TLB misses
     uint64_t access_counter;     // Contador para LRU
@@ -167,88 +138,15 @@ void tlb_get_stats(TLB* tlb, uint32_t* out_hits,
                    uint32_t* out_misses);
 ```
 
-### Búsqueda
+### Búsqueda y Reemplazo
 
-```c
-int tlb_lookup(TLB* tlb, uint32_t vpn, uint32_t* out_pfn) {
-    pthread_mutex_lock(&tlb->mutex);
-    
-    for (int i = 0; i < TLB_SIZE; i++) {
-        if (tlb->entries[i].valid &&
-            tlb->entries[i].vpn == vpn) {
-            *out_pfn = tlb->entries[i].pfn;
-            tlb->entries[i].last_used = ++tlb->access_counter;
-            tlb->hits++;
-            
-            pthread_mutex_unlock(&tlb->mutex);
-            
-            LOG_TRACE(LOG_COMPONENT_MMU,
-                     "TLB HIT: VPN=0x%03X -> PFN=0x%03X",
-                     vpn, *out_pfn);
-            return 1;  // HIT
-        }
-    }
-    
-    tlb->misses++;
-    pthread_mutex_unlock(&tlb->mutex);
-    
-    LOG_TRACE(LOG_COMPONENT_MMU, "TLB MISS: VPN=0x%03X", vpn);
-    return 0;  // MISS
-}
-```
+**lookup(vpn):** Recorre las 16 entradas buscando `valid` $=1$ y `vpn` $=$ `input`. Si encuentra, actualiza `last_used` incrementando el `access_counter` global e incrementa hits. Si no encuentra, incrementa misses.
 
-### Reemplazo LRU
-
-Cuando se actualiza el TLB en un MISS, se usa LRU (Least Recently Used) para elegir la entrada víctima:
-
-```c
-void tlb_update(TLB* tlb, uint32_t vpn, uint32_t pfn) {
-    pthread_mutex_lock(&tlb->mutex);
-    
-    // Buscar entrada inválida primero
-    for (int i = 0; i < TLB_SIZE; i++) {
-        if (!tlb->entries[i].valid) {
-            tlb->entries[i].vpn = vpn;
-            tlb->entries[i].pfn = pfn;
-            tlb->entries[i].valid = 1;
-            tlb->entries[i].last_used = ++tlb->access_counter;
-            
-            pthread_mutex_unlock(&tlb->mutex);
-            LOG_TRACE(LOG_COMPONENT_MMU,
-                     "TLB UPDATE: VPN=0x%03X -> PFN=0x%03X "
-                     "(free slot)",
-                     vpn, pfn);
-            return;
-        }
-    }
-    
-    // Encontrar entrada LRU
-    int lru_idx = 0;
-    uint64_t min_last_used = tlb->entries[0].last_used;
-    for (int i = 1; i < TLB_SIZE; i++) {
-        if (tlb->entries[i].last_used < min_last_used) {
-            min_last_used = tlb->entries[i].last_used;
-            lru_idx = i;
-        }
-    }
-    
-    // Reemplazar entrada LRU
-    tlb->entries[lru_idx].vpn = vpn;
-    tlb->entries[lru_idx].pfn = pfn;
-    tlb->entries[lru_idx].valid = 1;
-    tlb->entries[lru_idx].last_used = ++tlb->access_counter;
-    
-    pthread_mutex_unlock(&tlb->mutex);
-    LOG_TRACE(LOG_COMPONENT_MMU,
-             "TLB UPDATE: VPN=0x%03X -> PFN=0x%03X "
-             "(LRU eviction)",
-             vpn, pfn);
-}
-```
+**update(vpn, pfn):** Primero busca entradas inválidas (`valid=0`). Si no hay, encuentra la entrada con menor `last_used` (política LRU - Least Recently Used) y la reemplaza. Setea `vpn`, `pfn`, `valid=1` y actualiza `last_used` con el contador actual.
 
 ## Page Table
 
-Cada proceso tiene su propia tabla de páginas que mapea VPN→PFN.
+Cada proceso tiene su propia tabla de páginas que mapea VPN $\rightarrow$ PFN.
 
 ### Estructura
 
@@ -280,38 +178,7 @@ void page_table_unmap(PageTable* pt, uint32_t vpn,
 
 ### Asignación bajo Demanda
 
-No asignamos todas las páginas al cargar el programa —¿para qué? Usamos demand paging: cuando se accede a una página no mapeada, `page_table_map()` pide un frame físico y crea la entrada ahí mismo.
-
-```c
-int page_table_map(PageTable* pt, uint32_t vpn,
-                   PhysicalMemory* mem) {
-    if (vpn >= NUM_PAGES) return -1;
-    
-    if (pt->entries[vpn].valid) {
-        return 0;  // Ya mapeada
-    }
-    
-    // Solicitar frame físico
-    uint32_t pfn = physical_memory_allocate_frame(mem);
-    if (pfn == 0xFFFFFFFF) {
-        LOG_ERROR(LOG_COMPONENT_MEMORY,
-                 "Failed to allocate frame for VPN=0x%03X",
-                 vpn);
-        return -1;
-    }
-    
-    // Crear entrada
-    pt->entries[vpn].pfn = pfn;
-    pt->entries[vpn].valid = 1;
-    pt->entries[vpn].present = 1;
-    pt->num_allocated_pages++;
-    
-    LOG_DEBUG(LOG_COMPONENT_MEMORY,
-             "Mapped VPN=0x%03X -> PFN=0x%03X", vpn, pfn);
-    
-    return 0;
-}
-```
+No asignamos todas las páginas al cargar el programa —¿para qué? Usamos demand paging: cuando se accede a una página no mapeada, `page_table_map()` pide un frame físico con `allocate_frame()`, setea la entrada `{pfn, valid=1, present=1}` y listo.
 
 ## MMU (Memory Management Unit)
 
@@ -330,64 +197,65 @@ typedef struct {
 
 ### Traducción de Direcciones
 
-```c
-uint32_t mmu_translate(MMU* mmu, uint32_t virtual_addr) {
-    uint32_t vpn = virtual_addr >> PAGE_SHIFT;     // bits 23-12
-    uint32_t offset = virtual_addr & PAGE_MASK;    // bits 11-0
-    uint32_t pfn;
-    
-    // 1. Intentar TLB lookup
-    if (tlb_lookup(mmu->tlb, vpn, &pfn)) {
-        // TLB HIT
-        uint32_t physical_addr = (pfn << PAGE_SHIFT) | offset;
-        LOG_TRACE(LOG_COMPONENT_MMU,
-                 "Translate 0x%06X -> 0x%06X (TLB HIT)",
-                 virtual_addr, physical_addr);
-        return physical_addr;
-    }
-    
-    // 2. TLB MISS: consultar Page Table
-    pfn = page_table_lookup(mmu->page_table, vpn);
-    if (pfn == 0xFFFFFFFF) {
-        // Página no mapeada: asignar bajo demanda
-        if (page_table_map(mmu->page_table, vpn,
-                          mmu->physical_memory) != 0) {
-            LOG_ERROR(LOG_COMPONENT_MMU, "Page fault at VPN=0x%03X", vpn);
-            return 0xFFFFFFFF;
-        }
-        pfn = page_table_lookup(mmu->page_table, vpn);
-    }
-    
-    // 3. Actualizar TLB con la traducción
-    tlb_update(mmu->tlb, vpn, pfn);
-    
-    uint32_t physical_addr = (pfn << PAGE_SHIFT) | offset;
-    LOG_TRACE(LOG_COMPONENT_MMU,
-             "Translate 0x%06X -> 0x%06X (TLB MISS, PT HIT)",
-             virtual_addr, physical_addr);
-    return physical_addr;
-}
+```{.mermaid format=pdf}
+flowchart TD
+    START([vaddr]) --> SPLIT[Extraer VPN y offset]
+    SPLIT --> TLB{TLB lookup}
+    TLB -->|HIT| COMPOSE1["pfn << 12 | offset"]
+    TLB -->|MISS| PT{Page Table lookup}
+    PT -->|Valid| UPDATE[tlb_update]
+    PT -->|Invalid| MAP[page_table_map]
+    MAP --> UPDATE
+    UPDATE --> COMPOSE2["pfn << 12 | offset"]
+    COMPOSE1 --> END([paddr])
+    COMPOSE2 --> END
 ```
 
-### Lectura/Escritura
+Paso a paso: (1) extraer VPN y offset, (2) consultar TLB, (3) si miss: consultar Page Table, (4) si inválida: asignar bajo demanda, (5) actualizar TLB, (6) componer dirección física.
 
-```c
-uint32_t mmu_read_word(MMU* mmu, uint32_t virtual_addr) {
-    uint32_t physical_addr = mmu_translate(mmu, virtual_addr);
-    if (physical_addr == 0xFFFFFFFF) return 0;
-    
-    return physical_memory_read_word(mmu->physical_memory,
-                                     physical_addr);
-}
+**read_word/write_word:** Traducen con `mmu_translate()` y llaman a `physical_memory_read/write_word()`.
 
-void mmu_write_word(MMU* mmu, uint32_t virtual_addr,
-                    uint32_t value) {
-    uint32_t physical_addr = mmu_translate(mmu, virtual_addr);
-    if (physical_addr == 0xFFFFFFFF) return;
-    
-    physical_memory_write_word(mmu->physical_memory,
-                              physical_addr, value);
-}
+### Ejemplo de Traducción
+
+Traducción de dirección virtual `0x001234` paso a paso:
+
+```plaintext
+1. Dirección virtual: 0x001234
+   ┌──────────────┬──────────────┐
+   │  VPN = 0x001 │ Offset = 0x234│
+   └──────────────┴──────────────┘
+     bits 23-12      bits 11-0
+   
+2. TLB Lookup (VPN=0x001):
+   - Buscar en 16 entradas
+   - MISS (primera vez)
+   
+3. Page Table Lookup (VPN=0x001):
+   - Buscar entries[0x001]
+   - INVALID → Asignar bajo demanda
+   
+4. Allocate Frame:
+   - physical_memory_allocate_frame()
+   - Frame asignado: PFN=0x100
+   - Actualizar PT: entries[0x001] = {pfn:0x100, valid:1}
+   
+5. Update TLB:
+   - Buscar entrada inválida o usar LRU
+   - Insertar {vpn:0x001, pfn:0x100, valid:1, last_used:counter++}
+   
+6. Componer dirección física:
+   paddr = (PFN << 12) | offset
+   paddr = (0x100 << 12) | 0x234
+   paddr = 0x100000 | 0x234
+   paddr = 0x100234
+   
+Resultado: 0x001234 → 0x100234
+```
+
+**Siguiente acceso a 0x001240:**
+```plaintext
+VPN=0x001 → TLB HIT! → PFN=0x100
+paddr = 0x100240 (sin acceso a Page Table)
 ```
 
 ## Conjunto de Instrucciones (ISA)
@@ -396,244 +264,319 @@ Para validar que la memoria virtual funciona, implementamos un ISA minimalista c
 
 ### Formato de Instrucción
 
+Cada instrucción ocupa exactamente 32 bits (4 bytes, 1 word), permitiendo fetch atómico con una sola lectura de memoria. El opcode está en los 4 bits más significativos (bits 31-28), permitiendo hasta 16 instrucciones diferentes.
+
+Instrucciones tipo I (LOAD/STORE) usan: opcode (4 bits) + registro (4 bits) + address (24 bits). La dirección de 24 bits permite acceder a todo el espacio de direcciones virtuales (16MB). El campo de registro (Rd para LOAD, Rs para STORE) identifica qué registro usar.
+
+Instrucciones tipo R (ADD) usan: opcode (4 bits) + Rd (4 bits) + Rs1 (4 bits) + Rs2 (4 bits) + unused (16 bits). Los tres campos de registro permiten operaciones triádicas: `Rd = Rs1 + Rs2`.
+
+EXIT es especial: opcode 0xF (bits 31-28) + 28 bits ignorados. Detectar EXIT es trivial: `if ((instr >> 28) == 0xF)`. No necesita operandos porque su única función es terminar el proceso.
+
+Esta codificación compacta permite programas pequeños que caben en pocas páginas de memoria, facilitando las pruebas del sistema de paginación sin desperdiciar frames.
+
+```plaintext
+LOAD/STORE (tipo I):
+┌──────┬──────┬────────────────────────┐
+│opcode│  Rd  │       address          │
+└──────┴──────┴────────────────────────┘
+ 31  28 27  24 23                     0
+
+ADD (tipo R):
+┌──────┬──────┬──────┬──────┬────────┐
+│opcode│  Rd  │ Rs1  │ Rs2  │ unused │
+└──────┴──────┴──────┴──────┴────────┘
+ 31  28 27  24 23  20 19  16 15      0
+
+EXIT:
+┌──────┬──────────────────────────────┐
+│ 0xF  │          unused              │
+└──────┴──────────────────────────────┘
+ 31  28 27                           0
+```
+
+**Ejemplos codificados:**
 ```c
-typedef struct {
-    uint8_t opcode;         // Código de operación
-    uint32_t operand;       // Operando (dirección o valor)
-} Instruction;
+0x0A100020  // LD r10, 0x100020 (opcode=0x0, Rd=0xA, addr=0x100020)
+0x1C100028  // ST r12, 0x100028 (opcode=0x1, Rs=0xC, addr=0x100028)
+0x2CAB0000  // ADD r12, r10, r11 (opcode=0x2, Rd=0xC, Rs1=0xA, Rs2=0xB)
+0xF0000000  // EXIT (opcode=0xF)
 ```
 
 ### Instrucciones
 
 | Opcode | Mnemónico | Descripción |
 |--------|-----------|-------------|
-| 0x01   | `LOAD addr` | Cargar palabra de `addr` virtual en registro |
-| 0x02   | `STORE addr` | Almacenar registro en `addr` virtual |
-| 0x03   | `ADD value` | Sumar `value` al registro |
-| 0xFF   | `EXIT` | Terminar proceso |
+| 0x0    | `LD Rd, addr` | Rd ← memoria[addr] |
+| 0x1    | `ST Rs, addr` | memoria[addr] ← Rs |
+| 0x2    | `ADD Rd, Rs1, Rs2` | Rd $\leftarrow$ Rs1 + Rs2 |
+| 0xF    | `EXIT` | Terminar proceso |
 
-### Ejecución
+La ejecución hace switch sobre opcode extraído con `GET_OPCODE()`, llama a `mmu_read_word/write_word` para accesos a memoria, actualiza registros de la MMU, y devuelve 1 para continuar o 0 si encuentra EXIT.
 
-```c
-int instruction_execute(Instruction* inst, MMU* mmu,
-                        uint32_t* reg) {
-    switch (inst->opcode) {
-        case OPCODE_LOAD:
-            *reg = mmu_read_word(mmu, inst->operand);
-            LOG_DEBUG(LOG_COMPONENT_ISA,
-                     "LOAD [0x%06X] -> R = %u",
-                     inst->operand, *reg);
-            return 0;
-            
-        case OPCODE_STORE:
-            mmu_write_word(mmu, inst->operand, *reg);
-            LOG_DEBUG(LOG_COMPONENT_ISA,
-                     "STORE R(%u) -> [0x%06X]",
-                     *reg, inst->operand);
-            return 0;
-            
-        case OPCODE_ADD:
-            *reg += inst->operand;
-            LOG_DEBUG(LOG_COMPONENT_ISA,
-                     "ADD R += %u -> R = %u",
-                     inst->operand, *reg);
-            return 0;
-            
-        case OPCODE_EXIT:
-            LOG_INFO(LOG_COMPONENT_ISA, "EXIT");
-            return 1;  // Terminar proceso
-            
-        default:
-            LOG_ERROR(LOG_COMPONENT_ISA,
-                     "Invalid opcode 0x%02X", inst->opcode);
-            return -1;
-    }
-}
+## Loader de Programas
+
+El Loader carga programas desde archivos de texto plano y crea procesos con memoria virtual inicializada. **No usamos ELF binarios reales** sino un formato texto simplificado compatible con Prometheus.
+
+### Formato de Archivo (Texto Plano)
+
+Los archivos `.elf` generados por Prometheus tienen formato texto:
+
+```plaintext
+.text <dirección_inicio_hex>
+.data <dirección_inicio_hex>
+<instrucción_1_hex>
+<instrucción_2_hex>
+...
+<instrucción_EXIT>
+<dato_1_hex>
+<dato_2_hex>
+...
 ```
 
-## Loader de Programas ELF
+**Ejemplo real** (`prog001.elf`):
 
-El Loader carga programas en formato ELF simplificado y crea procesos con memoria virtual inicializada.
-
-### Formato ELF Simplificado
-
-```c
-typedef struct {
-    uint32_t magic;           // 0x464C4500 ("ELF\0")
-    uint32_t code_size;       // Tamaño del segmento (bytes)
-    uint32_t entry_point;     // Dirección virtual de inicio
-    uint32_t num_instructions; // Número de instrucciones
-} ELFHeader;
+```plaintext
+.text 100000
+.data 100020
+0A100020
+0B100024
+2CAB0000
+1C100028
+F0000000
+00000005
+0000000A
 ```
 
-El archivo ELF contiene:
-1. Header (16 bytes)
-2. Segmento de código (instrucciones consecutivas)
+- Primera línea: segmento .text empieza en `0x100000`
+- Segunda línea: segmento .data empieza en `0x100020`  
+- Líneas 3-7: instrucciones en hex (terminan con EXIT `0xF0000000`)
+- Líneas 8-9: datos iniciales en hex
 
 ### Carga de Programas
 
-```c
-PCB* loader_load_program(Loader* loader, const char* elf_path) {
-    // 1. Leer archivo ELF
-    FILE* f = fopen(elf_path, "rb");
-    if (!f) return NULL;
-    
-    ELFHeader header;
-    fread(&header, sizeof(ELFHeader), 1, f);
-    
-    if (header.magic != ELF_MAGIC) {
-        fclose(f);
-        return NULL;
-    }
-    
-    // 2. Crear proceso
-    uint32_t pid = kernel_allocate_pid(loader->kernel);
-    PCB* pcb = pcb_create(pid, 0);  // TTL=0 (se calcula según instrucciones)
-    
-    // 3. Crear MMU para el proceso
-    pcb->mmu = mmu_create(loader->kernel->physical_memory);
-    
-    // 4. Cargar instrucciones en memoria virtual
-    Instruction inst;
-    for (uint32_t i = 0; i < header.num_instructions; i++) {
-        fread(&inst, sizeof(Instruction), 1, f);
-        
-        uint32_t virtual_addr = header.entry_point + (i * sizeof(Instruction));
-        
-        // Escribir instrucción en memoria virtual
-        mmu_write_word(pcb->mmu, virtual_addr, *((uint32_t*)&inst));
-    }
-    
-    pcb->pc = header.entry_point;  // Program Counter inicial
-    pcb->state = PROCESS_STATE_READY;
-    
-    fclose(f);
-    
-    LOG_INFO(LOG_COMPONENT_LOADER,
-            "Programa %s creado: PID=%u, %u instrucciones",
-            elf_path, pid, header.num_instructions);
-    
-    return pcb;
-}
-```
+`loader_load_program()` realiza los siguientes pasos:
+
+1. **Parsear archivo**: Lee headers `.text` y `.data`, separa instrucciones de datos
+2. **Crear PCB**: Inicializa proceso con PID único, estado NEW, temperatura 0
+3. **Crear Page Table**: Asigna tabla de páginas nueva en memoria física
+4. **Cargar .text**: Para cada instrucción, calcula VPN de su dirección virtual, asigna frame si es página nueva, escribe la instrucción con `physical_memory_write_word()`
+5. **Cargar .data**: Mismo proceso pero con datos iniciales
+6. **Configurar MMU**: Setea PTBR al physical address de la Page Table y PC al inicio de .text
+
+El loader **no** asigna todas las páginas al cargar—solo las que contienen código o datos iniciales. El resto se asignan bajo demanda cuando el programa las accede.
 
 ### Generador de Programas (Prometheus)
 
-Para las pruebas creamos `prometheus`, un generador que escupe programas ELF aleatorios con secuencias de LOAD/STORE/ADD/EXIT. Las direcciones virtuales están distribuidas para forzar el uso de múltiples páginas y probar bien el TLB.
+Para las pruebas creamos `prometheus`, un generador que produce programas sintéticos con patrones controlables de acceso a memoria. Genera secuencias de LOAD/STORE/ADD/EXIT con direcciones distribuidas para forzar múltiples páginas y estresar el TLB.
+
+#### Funcionamiento
+
+Prometheus toma varios parámetros:
+
+- `-s <seed>`: Semilla para generación aleatoria (reproducibilidad)
+- `-n <num>`: Cuántos programas generar
+- `-f <first>`: Número del primer programa (para nombrado)
+- `-l <max_lines>`: Número máximo de instrucciones por programa
+- `-p <max_lines_data>`: Número máximo de datos en segmento .data
+
+**Ejemplo de uso:**
+```bash
+# Generar 10 programas con semilla 100, entre 5-20 instrucciones
+./build/prometheus -s 100 -n 10 -f 0 -l 20 -p 60
+```
+
+Cada programa generado sigue el patrón de 4 instrucciones repetido en bucle:
+
+1. **LOAD** de variable aleatoria del segmento .data → registro Rd
+2. **LOAD** de otra variable .data → registro Rd+1
+3. **ADD** de ambos registros → registro Rd+2
+4. **STORE** del resultado en .data → variable siguiente
+
+Este patrón genera un patrón de acceso a memoria realista: lecturas de datos, procesamiento (suma), y escritura de resultados. Las direcciones están distribuidas aleatoriamente en el segmento .data, forzando al TLB a trabajar con múltiples páginas.
+
+#### Formato de Salida
+
+```plaintext
+.text 100000
+.data 100020
+0A100020
+0B100024
+2CAB0000
+1C100028
+F0000000
+00000005
+0000000A
+```
+
+- **Línea 1**: `.text <hex>` — dirección de inicio del código (siempre alineada a límite de página)
+- **Línea 2**: `.data <hex>` — dirección de inicio de datos (calculada como .text + tamaño_código alineado)
+- **Líneas 3-(n-1)**: Instrucciones codificadas en hex (LOAD/STORE/ADD)
+- **Línea n**: `F0000000` — instrucción EXIT que termina el programa
+- **Líneas (n+1)+**: Valores de datos iniciales en hex (típicamente entre 4-60 words)
+
+Los datos iniciales son valores aleatorios entre 0 y 100, simulando variables ya inicializadas en memoria.
 
 ```bash
 $ ./prometheus/heracles -n 10 -s 100
 Generated 10 ELF programs in elfs/ directory
 ```
 
+#### Formato de Archivo
+
+Los programas usan formato texto plano (no ELF binario real):
+
+```plaintext
+.text 00001000
+.data 00002000
+10001000
+10002004
+30000005
+F0000000
+0000002A
+```
+
+- Línea 1: `.text <dirección>` — inicio del segmento de código
+- Línea 2: `.data <dirección>` — inicio del segmento de datos
+- Siguientes líneas: instrucciones en hexadecimal (formato compactado opcode+operando)
+- Última instrucción: `EXIT` (0xF0000000)
+- Después de EXIT: valores de datos iniciales
+
 Cada programa tiene entre 5 y 50 instrucciones, con direcciones virtuales que fuerzan el uso de múltiples páginas (validando paginación y TLB).
 
 ## Integración con el Kernel
 
-Cada hardware thread ahora ejecuta instrucciones del proceso asignado en cada tick:
+En cada tick, `machine_advance_cycle()` ejecuta un ciclo completo de CPU para procesos con programa cargado. Este ciclo refleja el comportamiento de CPUs reales pero simplificado.
 
-```c
-void machine_advance_cycle(Kernel* kernel) {
-    for (each hardware thread) {
-        PCB* current = thread->current_pcb;
-        
-        if (current && current->pid != 0) {
-            // Leer instrucción desde PC
-            uint32_t inst_word =
-                mmu_read_word(current->mmu, current->pc);
-            Instruction inst = *((Instruction*)&inst_word);
-            
-            // Ejecutar instrucción
-            int result = instruction_execute(&inst, current->mmu,
-                                            &current->reg);
-            
-            if (result == 1) {
-                // EXIT ejecutado
-                current->ttl = 0;
-                kernel_signal_scheduler(kernel);
-            } else if (result == 0) {
-                // Instrucción normal
-                current->pc += sizeof(Instruction);
-                current->ttl--;
-                current->ticks_since_swap++;
-                current->temperature++;
-                
-                if (current->ttl == 0 ||
-                    quantum_expired(current, kernel->config)) {
-                    kernel_signal_scheduler(kernel);
-                }
-            }
-        }
-    }
-}
+### Ciclo Fetch-Decode-Execute
+
+```{.mermaid format=pdf}
+flowchart TD
+    Start([Inicio Tick]) --> CheckLoaded{Proceso tiene\nprograma?}
+    CheckLoaded -->|No| DecrTTL[TTL--]
+    DecrTTL --> End([Fin Tick])
+    
+    CheckLoaded -->|Sí| Fetch
+    
+    subgraph Fetch ["FETCH"]
+        F1[Leer PC de MMU]
+        F2[mmu_translate PC]
+        F3{TLB?}
+        F3 -->|HIT| F4a[PFN from TLB]
+        F3 -->|MISS| F4b[Page Table lookup]
+        F4b -->|Invalid| F5[Allocate frame]
+        F5 --> F6[Update TLB]
+        F4b -->|Valid| F6
+        F4a --> F7
+        F6 --> F7[physical_memory_read_word]
+        F7 --> F8[Guardar en IR]
+    end
+    
+    Fetch --> Decode
+    
+    subgraph Decode ["DECODE"]
+        D1[GET_OPCODE instr]
+        D2{Tipo?}
+        D2 -->|LD/ST| D3[GET_RD + GET_ADDR]
+        D2 -->|ADD| D4[GET_RD + GET_RS1 + GET_RS2]
+        D2 -->|EXIT| D5[Sin operandos]
+    end
+    
+    Decode --> Execute
+    
+    subgraph Execute ["EXECUTE"]
+        E1{Opcode?}
+        E1 -->|LOAD| E2[Traducir addr\nLeer memoria\nRegistro = valor]
+        E1 -->|STORE| E3[Traducir addr\nvalor = Registro\nEscribir memoria]
+        E1 -->|ADD| E4[Rd = Rs1 + Rs2]
+        E1 -->|EXIT| E5[state = TERMINATED\nreturn 0]
+    end
+    
+    Execute --> UpdatePC{EXIT?}
+    UpdatePC -->|No| PC[PC += 4]
+    UpdatePC -->|Sí| Terminate[Terminar proceso]
+    PC --> End
+    Terminate --> End
+    
+    style Fetch fill:#e1f5ff
+    style Decode fill:#ffe1f5
+    style Execute fill:#e1ffe1
 ```
+
+**Fetch:** Se lee el PC (Program Counter) de la MMU, que contiene la dirección virtual de la próxima instrucción. Se traduce con `mmu_translate()` obteniendo la dirección física (posible TLB hit/miss y page fault). Se lee la palabra de memoria física con `physical_memory_read_word()` y se guarda en el IR (Instruction Register) de la MMU.
+
+**Decode:** Se extrae el opcode usando `GET_OPCODE(instr)` que aplica máscara y shift: `(instr >> 24) & 0xFF`. Según el opcode, se extraen los demás campos: registro destino `GET_RD()`, dirección `GET_ADDR()`, o registros fuente `GET_RS1()/GET_RS2()`. Estos macros encapsulan el bit-twiddling necesario.
+
+**Execute:** Se ejecuta la operación correspondiente. LOAD traduce la dirección operando (segunda traducción), lee memoria y guarda en registro. STORE traduce dirección, lee registro y escribe memoria. ADD suma inmediato a registro. EXIT setea el estado del proceso a TERMINATED y retorna 0, deteniendo la ejecución.
+
+**Update PC:** Si la instrucción no fue EXIT (retornó 1), se incrementa PC += 4 (WORD_SIZE) apuntando a la siguiente instrucción. El ciclo se repite en el próximo tick.
+
+Procesos sin programa (`is_loaded=false`) omiten este ciclo y solo decrementan TTL, simulando procesos que no ejecutan código real pero consumen tiempo de CPU. Esto permite mezclar procesos reales con procesos sintéticos en las pruebas.
 
 ## Resultados de Pruebas
 
-### TLB Hit Rate
+**TLB Hit Rate**: 85-95% en las pruebas, validando localidad espacial/temporal.
 
-Las pruebas muestran tasas de acierto del TLB entre 85% y 95%, validando la localidad espacial y temporal de los accesos a memoria.
+**Uso de Memoria**: Demand paging funciona correctamente. Cada proceso usa 1-2 frames (según páginas accedidas).
 
-```plaintext
-CPU 0 Core 0 Thread 0:
-  TLB: 68 hits, 11 misses (86.1% hit rate)
-CPU 0 Core 0 Thread 1:
-  TLB: 142 hits, 18 misses (88.8% hit rate)
-```
-
-### Uso de Memoria
-
-Las estadísticas confirman que la asignación bajo demanda funciona correctamente:
-
-```plaintext
-Memory: 9/3840 user frames (0.2%), peak: 9 (0.2%)
-  Allocations: 9, Frees: 0
-```
-
-Cada proceso usa aproximadamente 1-2 frames (dependiendo de cuántas páginas virtuales accede).
-
-### Trazas de Ejecución
-
-```plaintext
-[MMU] TLB MISS: VPN=0x000
-[MEM] Mapped VPN=0x000 -> PFN=0x100
-[MMU] TLB UPDATE: VPN=0x000 -> PFN=0x100
-[MMU] Translate 0x000000 -> 0x100000 (TLB MISS, PT HIT)
-[ISA] LOAD [0x000000] -> R = 42
-[MMU] TLB HIT: VPN=0x000 -> PFN=0x100
-[MMU] Translate 0x000004 -> 0x100004 (TLB HIT)
-[ISA] ADD R += 10 -> R = 52
-[MMU] TLB HIT: VPN=0x000 -> PFN=0x100
-[MMU] Translate 0x000008 -> 0x100008 (TLB HIT)
-[ISA] STORE R(52) -> [0x000008]
-```
-
-Las trazas confirman que:
-1. Primer acceso a VPN genera TLB MISS y asignación de frame
-2. Accesos subsiguientes a la misma página generan TLB HIT
-3. Instrucciones se ejecutan correctamente
-4. Traducciones virtuales→físicas son consistentes
+**Trazas**: Primer acceso a VPN $\\rightarrow$ TLB MISS + asignación de frame. Accesos subsiguientes $\\rightarrow$ TLB HIT. Instrucciones ejecutadas correctamente, traducciones virtuales $\\rightarrow$ físicas consistentes.
 
 ## Decisiones de Diseño
 
 ### Tamaño de Página 4KB
 
-Se ha elegido 4KB como tamaño de página, el estándar en arquitecturas x86/x64. Esta decisión equilibra fragmentación interna (páginas grandes desperdician memoria) y overhead de Page Table (páginas pequeñas requieren más entradas).
+Usamos 4KB como tamaño de página, el estándar en arquitecturas x86/x64. Equilibra fragmentación interna (páginas grandes desperdician memoria) y overhead de Page Table (páginas pequeñas requieren más entradas).
 
-### TLB de 8 Entradas
+### TLB de 16 Entradas
 
-Un TLB de 8 entradas es pequeño comparado con hardware real (~512 entradas en CPUs modernos), pero suficiente para este simulador. Permite observar tanto HITs como MISSes en las trazas, validando la política de reemplazo LRU.
+Un TLB de 16 entradas es pequeño comparado con hardware real (~512-1024 entradas en CPUs modernos), pero suficiente para nuestro simulador. Nos dejó observar tanto HITs como MISSes en las trazas, validando la política de reemplazo LRU. Con programas que acceden a 3-5 páginas diferentes, un TLB de 16 entradas mantiene todas las traducciones activas en caché, explicando los hit rates altos ($85\%-95\%$).
+
+### MMU por Hardware Thread
+
+Cada hardware thread tiene su propia MMU independiente con TLB privado. Esta decisión de diseño refleja arquitecturas reales donde cada contexto de ejecución mantiene su propio TLB para evitar interferencias entre procesos.
+
+Al despachar un proceso, el scheduler configura la MMU del thread de destino. La operación crítica es `mmu_set_ptbr(pcb->mm.pgb)`, que actualiza el Page Table Base Register apuntando a la tabla de páginas del proceso nuevo. Este cambio de puntero modifica instantáneamente el espacio de direcciones visible: las mismas direcciones virtuales ahora se traducen a frames físicos completamente diferentes.
+
+Al cambiar el PTBR, el TLB queda automáticamente inválido porque sus entradas apuntan a traducciones del proceso anterior. Nuestra implementación hace flush explícito con `tlb_invalidate()`, marcando todas las entradas como invalid=0. El proceso nuevo empieza con TLB frío, sufriendo misses hasta que se calientan las traducciones más usadas.
+
+El PC (Program Counter) también se actualiza a `pcb->mm.code_start`, posicionando la ejecución al inicio del segmento de código del proceso. La primera instrucción fetcheada desencadena traducciones de dirección y posiblemente page faults si el código no está mapeado aún (demand paging).
+
+Este modelo permite context switches ultra-rápidos: solo cambiamos dos punteros (PTBR y PC) y limpiamos el TLB. No hay que copiar ni reconstruir estructuras, todo queda ready para ejecutar inmediatamente.
 
 ### Demand Paging
 
-Las páginas se asignan bajo demanda (no todas al cargar el programa). Esta decisión refleja el comportamiento de sistemas operativos reales y optimiza el uso de memoria (solo se asignan las páginas realmente accedidas).
+Las páginas se asignan bajo demanda (no todas al cargar el programa). Esta decisión refleja el comportamiento de sistemas operativos reales y optimiza el uso de memoria: solo se asignan las páginas realmente accedidas. El loader solo mapea las páginas que contienen código o datos iniciales; el resto se asignan en el primer acceso (page fault transparente).
 
 ### ISA Minimalista
 
-El conjunto de instrucciones se ha limitado a 4 opcodes para mantener la simplicidad. Aunque limitado, es suficiente para validar todos los aspectos de la memoria virtual: lectura, escritura, traducción de direcciones, TLB, paginación y terminación de procesos.
+Limitamos el conjunto de instrucciones a 4 opcodes para mantener la simplicidad. Aunque limitado, es suficiente para validar todos los aspectos de la memoria virtual: lectura (LOAD), escritura (STORE), procesamiento (ADD) y terminación (EXIT). Añadir más instrucciones no aportaría valor a la validación del subsistema de memoria.
 
-### MMU por Proceso
+### Context Switches y MMU
 
-Cada proceso tiene su propia MMU (con TLB y Page Table independientes). Esta decisión simplifica la implementación (no hay que invalidar TLBs en context switches) y refleja arquitecturas con TLBs tageados por ASID (Address Space Identifier).
+Al despachar un proceso a un hardware thread, el scheduler configura la MMU del thread con el espacio de direcciones del proceso:
+
+```{.mermaid format=pdf}
+sequenceDiagram
+    participant S as Scheduler
+    participant T as HW Thread
+    participant M as MMU
+    participant P as PCB
+    
+    S->>T: scheduler_dispatch(pcb)
+    T->>P: Actualizar estado (RUNNING)
+    T->>P: Asignar IDs (cpu, core, thread)
+    T->>P: ticks_since_swap = 0
+    
+    alt Proceso con programa cargado
+        T->>M: mmu_set_ptbr(pcb->mm.pgb)
+        Note over M: Cambiar espacio direcciones
+        T->>M: pc = pcb->mm.code_start
+        M->>M: Invalidar TLB
+        Note over M: TLB flush automático
+    end
+    
+    T->>T: current_pcb = pcb
+```
+
+Esta arquitectura modela hardware real donde cada core tiene su MMU y TLB. El PTBR permite cambiar de espacio de direcciones sin reconstruir la MMU. El TLB se invalida automáticamente al cambiar PTBR, forzando al nuevo proceso a reconstruir sus traducciones en caché.
 
 \newpage

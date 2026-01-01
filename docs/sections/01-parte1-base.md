@@ -10,22 +10,35 @@ Esta parte se centra solo en la infraestructura base —el scheduler llega en la
 
 ## Diseño Global
 
-El diseño sigue un patrón event-driven con componentes bien delimitados. La siguiente figura muestra la arquitectura de la Parte 1:
+El sistema sigue una arquitectura productora-consumidora con sincronización mediante mutex y variables de condición. El Clock actúa como maestro del tiempo, generando ticks periódicos que propagan eventos a través de todo el sistema.
 
 ```{.mermaid format=pdf}
-graph TD
-    CLK[Clock] --> TMR[Timer]
-    TMR --> PG[Process Generator]
-    PG --> MQ[Process Queue]
-    MQ --> MCH[Machine]
-    MCH --> CPU[CPU]
-    CPU --> CORE[Core]
-    CORE --> HWT["HW Thread (PCB)"]
+flowchart TD
+    Clock[Clock Thread] -->|Tick| Timer1[Timer Scheduler]
+    Clock -->|Tick| Timer2[Timer Process Gen]
+    Clock -->|Tick| Machine[Machine Advance]
+    
+    Timer2 -->|Interrupción| ProcGen[Process Generator]
+    ProcGen -->|pcb_create| PCB[Nuevo PCB]
+    PCB -->|enqueue| Queue[ProcessQueue]
+    
+    Timer1 -->|Interrupción| Sched[Scheduler Thread]
+    Machine -->|Eventos detectados| Sched
+    
+    Queue -.->|dequeue| Sched
+    Sched -->|dispatch| HWThread[Hardware Threads]
+    
+    style Clock fill:#e1f5ff
+    style Queue fill:#fff4e1
+    style Sched fill:#ffe1e1
+    style ProcGen fill:#e1ffe1
 ```
 
-El **Clock** genera pulsos de tiempo (ticks) a intervalos regulares. El **Timer** consume estos ticks y genera interrupciones cuando se alcanza su periodo configurado. El **Process Generator** se despierta con las interrupciones del Timer y crea nuevos procesos, asignándoles un PID único y un TTL (time-to-live) aleatorio. Los procesos creados se encolan en la **ProcessQueue**, donde esperan a ser despachados a algún hardware thread disponible.
+Los componentes se organizan jerárquicamente: el Clock alimenta Timers configurables que generan interrupciones. Estas interrupciones despiertan al Process Generator, que crea PCBs y los encola. Los procesos encolados esperan a ser despachados por el scheduler (Parte 2) a alguno de los hardware threads disponibles en la Machine.
 
-La **Machine** modela la jerarquía hardware: cada CPU contiene cores, y cada core contiene hardware threads. Cada hardware thread puede ejecutar un proceso (PCB) o estar en estado IDLE.
+La Machine representa la topología hardware real: CPUs que contienen cores, y cores que contienen hardware threads. Cada thread ejecuta un proceso (o IDLE si no hay trabajo). Esta jerarquía refleja arquitecturas multinúcleo modernas como Intel Core o AMD Ryzen, donde cada núcleo físico puede tener múltiples threads lógicos vía hyperthreading.
+
+La sincronización es el eje central: todos los componentes cooperan mediante primitivas POSIX sin race conditions. El Clock hace broadcast para despertar múltiples consumidores, mientras que las colas usan mutex para acceso exclusivo.
 
 ## Implementación de Componentes
 
@@ -33,80 +46,51 @@ La **Machine** modela la jerarquía hardware: cada CPU contiene cores, y cada co
 
 El Clock es el corazón del sistema, el que produce los ticks de tiempo. Cada tick despierta a los consumidores que están esperando. Lo implementamos completamente thread-safe para que múltiples hilos puedan consumir ticks sin problemas.
 
-#### Interfaz
+La función central `clock_pulse()` incrementa el contador de ticks y despierta a todos los hilos bloqueados en `clock_wait_tick()` mediante broadcast. La variable `last` permite a los consumidores detectar si han perdido algún tick (cuando el sistema está muy cargado), comparándola con el tick actual. Además, `clock_get_tick()` permite consultas no bloqueantes y `clock_shutdown()` finaliza ordenadamente todos los consumidores.
 
-```c
-void clock_init(void);
-void clock_destroy(void);
-void clock_pulse(void);
-unsigned long clock_wait_tick(unsigned long *last);
-unsigned long clock_get_tick(void);
-void clock_shutdown(void);
+**Sincronización:**
+
+La sincronización del Clock usa el patrón productor-consumidor clásico con un mutex protegiendo el estado compartido y una variable de condición para las notificaciones. Cuando `clock_pulse()` incrementa el contador de ticks, hace broadcast con `pthread_cond_broadcast()` despertando a todos los consumidores bloqueados simultáneamente.
+
+```{.mermaid format=pdf}
+sequenceDiagram
+    participant CT as Clock Thread
+    participant M as Mutex + Condvar
+    participant T1 as Timer 1
+    participant T2 as Timer 2
+    participant PG as Process Gen
+    
+    T1->>M: clock_wait_tick(last_tick)
+    Note over T1: Bloquea en condvar
+    T2->>M: clock_wait_tick(last_tick)
+    Note over T2: Bloquea en condvar
+    PG->>M: clock_wait_tick(last_tick)
+    Note over PG: Bloquea en condvar
+    
+    CT->>M: pthread_mutex_lock()
+    CT->>M: tick_count++
+    CT->>M: pthread_cond_broadcast()
+    Note over M: Despertar TODOS los consumidores
+    CT->>M: pthread_mutex_unlock()
+    
+    M-->>T1: Despertar
+    M-->>T2: Despertar
+    M-->>PG: Despertar
+    
+    T1->>T1: Procesar tick
+    T2->>T2: Procesar tick
+    PG->>PG: Procesar tick
 ```
 
-La función `clock_pulse()` incrementa el contador de ticks y despierta a todos los hilos bloqueados en `clock_wait_tick()`. La variable `last` permite a los consumidores detectar si han perdido algún tick (cuando el sistema está muy cargado).
+Los consumidores llaman a `clock_wait_tick()` pasando su último tick conocido. La función detecta automáticamente si se perdieron ticks (por sobrecarga del sistema o latencia de scheduling) comparando el tick actual con el último procesado. Esto es importante para saber si nos hemos retrasado.
 
-#### Sincronización
-
-Usamos un mutex global y una variable de condición —nada del otro mundo, pero efectivo:
-
-```c
-static unsigned long current_tick = 0;
-static pthread_mutex_t tick_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t tick_cond = PTHREAD_COND_INITIALIZER;
-static int shutdown_flag = 0;
-```
-
-Cuando `clock_pulse()` se ejecuta, se adquiere el mutex, se incrementa `current_tick` y se hace broadcast a todos los hilos esperando en `tick_cond`. Los consumidores que llaman a `clock_wait_tick()` se bloquean en la variable de condición hasta recibir la señal.
+El shutdown usa una flag `is_running` que despierta a todos los hilos en espera sin incrementar el tick, dejándoles terminar ordenadamente.
 
 ### Timer
 
-El Timer cuenta ticks del Clock y genera interrupciones cuando llega al periodo configurado. Bastante simple: mantiene un contador interno que va incrementándose con cada tick, y al alcanzar el límite señaliza la interrupción y se reinicia.
+El Timer cuenta ticks del Clock y genera interrupciones cuando llega al periodo configurado. Mantiene un contador interno (`tick_count`) que se incrementa con cada llamada a `churros_timer_tick()` desde el Clock. Al alcanzar el `period` configurado, señaliza la interrupción mediante `pthread_cond_broadcast()` y reinicia el contador a cero.
 
-#### Estructura
-
-```c
-typedef struct {
-    uint32_t period;
-    uint32_t tick_count;
-    uint32_t interrupts_generated;
-    pthread_mutex_t mutex;
-    pthread_cond_t interrupt_cond;
-    int interrupt_pending;
-} Timer;
-```
-
-#### Interfaz
-
-```c
-Timer* churros_timer_create(uint32_t period);
-void churros_timer_destroy(Timer* timer);
-void churros_timer_tick(Timer* timer);
-void churros_timer_wait_interrupt(Timer* timer);
-int churros_timer_check_interrupt(Timer* timer);
-uint32_t churros_timer_get_generated(Timer* timer);
-void churros_timer_wake(Timer* timer);
-```
-
-El hilo del Clock invoca `churros_timer_tick()` en cada pulso. Los consumidores bloquean en `churros_timer_wait_interrupt()` y se despiertan cuando `tick_count` alcanza `period`.
-
-#### Funcionamiento
-
-```c
-void churros_timer_tick(Timer* timer) {
-    pthread_mutex_lock(&timer->mutex);
-    timer->tick_count++;
-    
-    if (timer->tick_count >= timer->period) {
-        timer->tick_count = 0;
-        timer->interrupt_pending = 1;
-        timer->interrupts_generated++;
-        pthread_cond_broadcast(&timer->interrupt_cond);
-    }
-    
-    pthread_mutex_unlock(&timer->mutex);
-}
-```
+Los consumidores bloquean en `churros_timer_wait_interrupt()` hasta que el timer alcanza su periodo. Internamente usa mutex + condvar para sincronización thread-safe, igual que el Clock. La flag `interrupt_pending` evita interrupciones perdidas si el consumidor tarda en procesar. Además, mantiene estadísticas con `interrupts_generated` para debugging.
 
 ### Process Control Block (PCB)
 
@@ -115,69 +99,67 @@ Cada proceso tiene su PCB, donde guardamos su estado, identificadores, TTL y mé
 #### Estructura
 
 ```c
-typedef enum {
-    PROCESS_STATE_NEW,
-    PROCESS_STATE_READY,
-    PROCESS_STATE_RUNNING,
-    PROCESS_STATE_TERMINATED
-} ProcessState;
-
-typedef struct PCB {
-    uint32_t pid;
-    ProcessState state;
-    uint32_t ttl;
-    int32_t cpu_id;
-    int32_t core_id;
-    int32_t hw_thread_id;
-    uint32_t ticks_since_swap;
-    uint32_t temperature;
+typedef struct {
+    uint32_t pid;          /* Process ID */
+    uint32_t ttl;          /* Time To Live en ticks */
 } PCB;
 ```
 
-El campo `ttl` (time-to-live) representa los ticks de CPU restantes antes de que el proceso termine. Los campos `cpu_id`, `core_id` y `hw_thread_id` indican dónde está ejecutando el proceso (-1 si no está asignado). El campo `ticks_since_swap` cuenta los ticks desde el último context switch, y `temperature` se utiliza en la Parte 2 para el algoritmo Chocolate Caliente.
+En esta primera parte, el PCB es minimalista: solo contiene el PID único que identifica al proceso y el TTL (Time To Live) que marca cuántos ticks le quedan de vida. Cada tick que el proceso ejecuta decrementa su TTL en 1, y cuando llega a 0, el proceso termina.
+
+**Nota**: En la Parte 2 se extiende el PCB añadiendo estado (`ProcessState` con valores NEW, READY, RUNNING, TERMINATED), campos de ubicación (`cpu_id`, `core_id`, `hw_thread_id` inicializados a -1 si no asignado), contador de ticks desde último swap (`ticks_since_swap`), y temperatura para el algoritmo Chocolate Caliente.
+
+```{.mermaid format=pdf}
+stateDiagram-v2
+    [*] --> NEW: pcb_create()
+    
+    note right of NEW
+        Parte 1: Solo PID y TTL
+        Sin estados explícitos
+    end note
+    
+    NEW --> TERMINATED: TTL = 0 (v1)
+    
+    note right of TERMINATED
+        Parte 2: Añade ciclo completo
+        NEW -> READY -> RUNNING -> TERMINATED
+        + ProcessState enum
+        + cpu_id, core_id, hw_thread_id
+        + ticks_since_swap
+        + temperature
+    end note
+    
+    TERMINATED --> [*]: pcb_destroy()
+```
 
 #### Interfaz
 
 ```c
-PCB* pcb_create(uint32_t pid, uint32_t ttl);
-PCB* pcb_create_idle(void);
+PCB* pcb_create(uint32_t pid);
 void pcb_destroy(PCB* pcb);
 ```
 
-La función `pcb_create_idle()` crea un proceso especial con PID=0 que se ejecuta cuando no hay procesos reales disponibles.
+En v1, `pcb_create()` toma solo el PID y genera internamente un TTL aleatorio entre 10 y 100 ticks. La función `pcb_create_idle()` se añade en la Parte 2 para crear procesos IDLE (PID=0) cuando no hay trabajo disponible.
 
 ### Process Queue
 
-La cola de procesos implementa una cola FIFO thread-safe para almacenar procesos en estado READY.
+La cola implementa FIFO thread-safe clásico con lista enlazada: punteros `head` y `tail` para enqueue/dequeue O(1), contador `size`, y mutex protegiendo todo. Las operaciones `process_queue_enqueue()` inserta al final, `process_queue_dequeue()` extrae del principio, y ambas adquieren el mutex garantizando thread-safety para múltiples productores (Process Generator) y consumidores (Scheduler) concurrentes. `process_queue_is_empty()` y `process_queue_size()` permiten consultas rápidas del estado.
 
-#### Estructura
+### Process Generator
 
-```c
-typedef struct ProcessQueueNode {
-    PCB* pcb;
-    struct ProcessQueueNode* next;
-} ProcessQueueNode;
+El Process Generator crea procesos automáticamente usando un Timer dedicado. Cada vez que el Timer genera una interrupción (configurable con `-g`, por defecto cada 10 ticks), el generador crea un PCB nuevo con:
 
-typedef struct {
-    ProcessQueueNode* head;
-    ProcessQueueNode* tail;
-    uint32_t size;
-    pthread_mutex_t mutex;
-} ProcessQueue;
-```
+1. **PID único**: Obtenido de `kernel_get_next_pid()` que usa un contador atómico protegido por mutex
+2. **TTL aleatorio**: Tiempo de vida entre 10 y 100 ticks generado con `rand()`
+3. **Estado inicial**: NEW, listo para ser encolado
 
-#### Interfaz
+El generador ejecuta en su propio hilo (`process_generator_thread_func`) bloqueando en `churros_timer_wait_interrupt()` hasta que el Timer lo despierta. Al despertar, crea el PCB con `pcb_create()`, lo encola con `process_queue_enqueue()` y registra el evento en los logs. Este diseño desacopla completamente la generación de procesos del Clock principal.
 
-```c
-void process_queue_init(ProcessQueue* queue);
-void process_queue_destroy(ProcessQueue* queue);
-void process_queue_enqueue(ProcessQueue* queue, PCB* pcb);
-PCB* process_queue_dequeue(ProcessQueue* queue);
-int process_queue_is_empty(ProcessQueue* queue);
-uint32_t process_queue_size(ProcessQueue* queue);
-```
+#### Sincronización
 
-Todas las operaciones adquieren el mutex antes de modificar la estructura, garantizando thread-safety para múltiples productores y consumidores concurrentes.
+El Process Generator usa el patrón productor clásico: genera PCBs y los deposita en la cola compartida. El Timer actúa como regulador temporal, convirtiendo los pulsos del Clock en interrupciones espaciadas según el periodo configurado. Esto permite controlar la tasa de llegada de procesos independientemente de la velocidad del reloj.
+
+La sincronización con la cola es automática gracias al mutex interno de ProcessQueue —el generador simplemente llama a `enqueue()` sin preocuparse de otros productores o consumidores concurrentes.
 
 ### Machine
 
@@ -185,28 +167,34 @@ El componente Machine modela la arquitectura hardware jerárquica: CPUs, cores y
 
 #### Estructuras
 
-```c
-typedef struct {
-    PCB* current_pcb;
-} HWThread;
-
-typedef struct {
-    HWThread* hw_threads;
-    uint32_t num_hw_threads;
-} Core;
-
-typedef struct {
-    Core* cores;
-    uint32_t num_cores;
-} CPU;
-
-typedef struct {
-    CPU* cpus;
-    uint32_t num_cpus;
-    uint32_t total_cores;
-    uint32_t total_hw_threads;
-    pthread_mutex_t mutex;
-} Machine;
+```{.mermaid format=pdf}
+classDiagram
+    class Machine {
+        +CPU* cpus
+        +uint32_t num_cpus
+        +uint32_t total_cores
+        +uint32_t total_hw_threads
+        +pthread_mutex_t mutex
+    }
+    
+    class CPU {
+        +Core* cores
+        +uint32_t num_cores
+    }
+    
+    class Core {
+        +HWThread* hw_threads
+        +uint32_t num_hw_threads
+    }
+    
+    class HWThread {
+        +PCB* current_pcb
+    }
+    
+    Machine "1" *-- "n" CPU
+    CPU "1" *-- "n" Core
+    Core "1" *-- "n" HWThread
+    HWThread "1" --> "0..1" PCB
 ```
 
 #### Interfaz
@@ -223,172 +211,76 @@ void machine_unlock(Machine* machine);
 
 La función `machine_create()` reserva memoria para toda la jerarquía y inicializa cada hardware thread con un proceso IDLE. Los métodos `machine_lock()` y `machine_unlock()` se utilizan para garantizar acceso exclusivo durante operaciones críticas (como el scheduling).
 
-#### Inicialización
-
-```c
-Machine* machine_create(uint32_t num_cpus,
-                        uint32_t num_cores_per_cpu,
-                        uint32_t num_hw_threads_per_core) {
-    Machine* machine = malloc(sizeof(Machine));
-    machine->num_cpus = num_cpus;
-    machine->total_cores = num_cpus * num_cores_per_cpu;
-    machine->total_hw_threads =
-        machine->total_cores * num_hw_threads_per_core;
-    
-    machine->cpus = malloc(num_cpus * sizeof(CPU));
-    for (uint32_t i = 0; i < num_cpus; i++) {
-        machine->cpus[i].num_cores = num_cores_per_cpu;
-        machine->cpus[i].cores =
-            malloc(num_cores_per_cpu * sizeof(Core));
-        
-        for (uint32_t j = 0; j < num_cores_per_cpu; j++) {
-            machine->cpus[i].cores[j].num_hw_threads =
-                num_hw_threads_per_core;
-            machine->cpus[i].cores[j].hw_threads =
-                malloc(num_hw_threads_per_core * sizeof(HWThread));
-            
-            for (uint32_t k = 0; k < num_hw_threads_per_core; k++) {
-                machine->cpus[i].cores[j].hw_threads[k].current_pcb =
-                    pcb_create_idle();
-            }
-        }
-    }
-    
-    pthread_mutex_init(&machine->mutex, NULL);
-    return machine;
-}
-```
-
 ### Process Generator
 
-El Process Generator es un hilo que se despierta periódicamente (según la interrupción del Timer) y crea nuevos procesos con PIDs únicos y TTL aleatorios.
+Un hilo que despierta con interrupciones del Timer, genera PIDs únicos y crea procesos con TTL aleatorio (10-100 ticks). El ciclo de operación:
 
-#### Funcionamiento
+1. Bloquea en `timer_wait_interrupt()` hasta que el timer alcanza su periodo
+2. Obtiene PID único con `kernel_allocate_pid()` (contador global protegido por mutex)
+3. Genera TTL aleatorio con `rand()` (rango 10-100 ticks)
+4. Crea el PCB con `pcb_create()`
+5. Lo encola con `process_queue_enqueue()`
+6. Señaliza al scheduler con `kernel_signal_scheduler()`
 
-```c
-static void* process_generator_thread_func(void* arg) {
-    Kernel* kernel = (Kernel*)arg;
-    unsigned long last_tick = 0;
-    
-    while (kernel_is_running(kernel)) {
-        churros_timer_wait_interrupt(kernel->procgen_timer);
-        
-        if (!kernel_is_running(kernel)) break;
-        
-        // Generar PID único
-        pthread_mutex_lock(&kernel->pid_mutex);
-        uint32_t pid = kernel->next_pid++;
-        pthread_mutex_unlock(&kernel->pid_mutex);
-        
-        // TTL aleatorio entre 10 y 100 ticks
-        uint32_t ttl = (rand() % 91) + 10;
-        
-        PCB* pcb = pcb_create(pid, ttl);
-        pcb->state = PROCESS_STATE_READY;
-        
-        process_queue_enqueue(kernel->process_queue, pcb);
-        
-        printf("[ProcessGenerator] Nuevo proceso creado: "
-               "PID=%u, TTL=%u\n", pid, ttl);
-    }
-    
-    return NULL;
-}
-```
+El periodo del timer es configurable: periodos cortos generan alta carga, periodos largos baja carga. Así podemos experimentar con diferentes escenarios sin recompilar.
 
 ### Kernel
 
-El componente Kernel orquesta todos los hilos del sistema: Clock, Scheduler (placeholder en v1), Process Generator.
+El kernel orquesta cuatro hilos principales que colaboran mediante sincronización explícita:
 
-#### Estructura
+- **clock_thread**: Genera ticks periódicos (`usleep()`) y despierta consumidores con broadcast
+- **procgen_timer_thread**: Cuenta ticks e interrumpe al generador de procesos
+- **process_gen_thread**: Crea PCBs cuando es interrumpido por su timer
+- **scheduler_thread**: Bloquea en variable de condición hasta que eventos lo despiertan (Parte 2)
 
-```c
-typedef struct {
-    Machine* machine;
-    ProcessQueue* process_queue;
-    Timer* sched_timer;
-    Timer* procgen_timer;
-    
-    pthread_t clock_thread;
-    pthread_t sched_timer_thread;
-    pthread_t procgen_timer_thread;
-    pthread_t scheduler_thread;
-    pthread_t process_gen_thread;
-    
-    pthread_mutex_t running_mutex;
-    pthread_mutex_t pid_mutex;
-    
-    int running;
-    uint32_t next_pid;
-    
-    KernelConfig config;
-} Kernel;
-```
+La secuencia de inicio es crítica: crear estructuras (Machine, ProcessQueue, Timers) $\rightarrow$ lanzar hilos (`pthread_create()`) en orden de dependencias $\rightarrow$ esperar inicialización. El shutdown también: setear `is_running=false` $\rightarrow$ despertar hilos bloqueados (broadcast/interrupciones) $\rightarrow$ `pthread_join()` para cada hilo. Este protocolo evita deadlocks.
 
-Cada componente tiene su propio hilo:
+### Ciclo de Máquina
 
-- **clock_thread**: Ejecuta `clock_pulse()` cada `config.clock_speed_ms` milisegundos
-- **sched_timer_thread**: Notifica ticks al timer del scheduler
-- **procgen_timer_thread**: Notifica ticks al timer del generador de procesos
-- **scheduler_thread**: En v1 solo despierta con las interrupciones del timer (no hace scheduling real)
-- **process_gen_thread**: Genera procesos nuevos al recibir interrupciones
+La función `machine_advance_cycle()` es el corazón del simulador, invocada en cada tick del Clock. Recorre todos los hardware threads de la jerarquía (CPUs $\rightarrow$ Cores $\rightarrow$ Threads) en orden, procesando cada PCB activo.
+
+**Procesamiento por tipo de proceso:**
+
+- **Sin programa** (`is_loaded=false`): Decrementa TTL, aumenta temperatura y `ticks_since_swap`
+- **Con programa** (`is_loaded=true`): Ejecuta ciclo fetch-decode-execute completo (Parte 3)
+
+**Detección de eventos:**
+
+Durante el recorrido, detecta dos eventos críticos:
+
+1. **Terminación**: Procesos con TTL=0 o que ejecutaron EXIT
+2. **Quantum expirado**: Procesos que alcanzaron su quantum (solo RR y Chocolate Caliente)
+
+Al detectar eventos, setea flags booleanas (`process_terminated_detected`, `quantum_expired_detected`). Al final del ciclo, si alguna flag está activa, señaliza al scheduler con `kernel_signal_scheduler()`.
+
+**Optimización batch:** Este diseño minimiza señalizaciones. En lugar de despertar al scheduler por cada thread que termina o expira quantum, acumulamos todos los eventos de un tick y señalizamos una sola vez al final, reduciendo overhead.
 
 ## Resultados de Pruebas
 
-La batería de tests de la Parte 1 valida el funcionamiento correcto del motor de tiempo, los timers y la generación de procesos.
+Los tests validan el funcionamiento completo de la infraestructura base. El Clock genera ticks consistentemente a 10ms de intervalo, los Timers interrumpen exactamente según su periodo configurado, y el Process Generator crea PIDs secuenciales con TTLs aleatorios entre 10-100 ticks. La ProcessQueue funciona correctamente sin race conditions bajo alta concurrencia (múltiples productores/consumidores). Toda la sincronización multihilo (mutex + condvar) opera sin deadlocks ni condiciones de carrera.
 
-### Salida de Ejemplo
+## Limitaciones de la Parte 1
 
-```plaintext
-[Clock] Tick 1
-[Clock] Tick 2
-...
-=== Iniciando Kernel de churrOS ===
-Configuración:
-  CPUs: 2
-  Cores por CPU: 2
-  HW Threads por Core: 2
-  Periodo del Timer: 2 ticks
-  Periodo de generación de procesos: 5 ticks
-  Velocidad del reloj: 10 ms
-  Duración de la simulación: 100 ticks
-===================================
+En esta primera entrega, el **scheduler no implementa planificación real**. Cuando un Timer activa el hilo del scheduler, este simplemente registra el evento en los logs pero no asigna procesos a hardware threads. Los procesos se generan y encolan correctamente, pero no se despachan.
 
-[Scheduler] Iniciado (periodo: 2 ticks, 20 ms)
-[ProcessGenerator] Iniciado (periodo: 5 ticks, 50 ms)
-[Clock] Iniciado
-[ProcessGenerator] Activación #1 por interrupción del timer
-[ProcessGenerator] Nuevo proceso creado: PID=1, TTL=50
-[Scheduler] Procesos en cola: 1
-[ProcessGenerator] Activación #2 por interrupción del timer
-[ProcessGenerator] Nuevo proceso creado: PID=2, TTL=18
-[Scheduler] Procesos en cola: 2
-```
-
-Los logs confirman que:
-
-1. El Clock genera ticks a 10ms de intervalo
-2. Los Timers generan interrupciones según su periodo configurado
-3. El Process Generator crea procesos con PIDs secuenciales y TTLs aleatorios
-4. Los procesos se encolan correctamente en la ProcessQueue
-5. La sincronización entre hilos funciona correctamente (no hay race conditions)
+Esto es intencional: la Parte 1 se centra exclusivamente en la infraestructura base (reloj, timers, generación de procesos, sincronización). La planificación propiamente dicha (Round Robin, FIFO, Chocolate Caliente) llega en la Parte 2, donde añadimos `scheduler.c` con lógica event-driven completa.
 
 ## Decisiones de Diseño
 
 ### Separación de Timers
 
-Se han utilizado dos timers independientes (uno para el scheduler, otro para el generador de procesos) en lugar de un único timer compartido. Esta decisión permite configurar periodos diferentes para cada componente, facilitando la experimentación con distintas configuraciones de carga del sistema.
+Usamos dos timers independientes (uno para el scheduler, otro para el generador de procesos) en lugar de uno compartido. Esto permite configurar periodos diferentes para cada componente, lo que facilita experimentar con distintas cargas del sistema.
 
 ### Procesos IDLE
 
-Cada hardware thread se inicializa con un proceso IDLE (PID=0). Esta decisión simplifica la lógica del scheduler (que se introduce en la Parte 2), ya que siempre hay un PCB válido en cada thread, eliminando la necesidad de comprobar punteros nulos constantemente.
+La lógica de procesos IDLE (PID=0) se añade en la Parte 2. En v1, los hardware threads simplemente no tienen procesos asignados inicialmente. Los IDLE llegan junto con el scheduling completo.
 
 ### Sincronización Mutex + Condvar
 
-Se ha optado por el patrón clásico de mutex + variable de condición en lugar de alternativas como semáforos o spin-locks. Este patrón es más eficiente en términos de CPU (los hilos duermen en lugar de hacer busy-waiting) y es el estándar POSIX más portable.
+Optamos por el patrón clásico de mutex + variable de condición en lugar de alternativas como semáforos o spin-locks. Es más eficiente en términos de CPU (los hilos duermen en lugar de hacer busy-waiting) y es el estándar POSIX más portable.
 
 ### TTL Aleatorio
 
-Los procesos se generan con TTL aleatorio entre 10 y 100 ticks. Esta decisión permite simular cargas de trabajo heterogéneas, donde algunos procesos son cortos (interactivos) y otros son largos (batch), validando mejor el comportamiento de los algoritmos de scheduling en la Parte 2.
+Los procesos se generan con TTL aleatorio entre 10 y 100 ticks. Así simulamos cargas de trabajo heterogéneas, donde algunos procesos son cortos (interactivos) y otros son largos (batch), validando mejor el comportamiento de los algoritmos de scheduling en la Parte 2.
 
 \newpage

@@ -12,59 +12,52 @@ Sobre lo que ya teníamos de la Parte 1, añadimos `scheduler.c/h` y modificamos
 
 ## Arquitectura del Scheduler Event-Driven
 
-Nuestro scheduler solo despierta ante estos eventos:
-
-- **Proceso termina**: El TTL llega a 0 o ejecuta EXIT
-- **Quantum expira**: Solo en Round Robin y Chocolate Caliente
-- **Nuevo proceso creado**: El generador encola un PCB nuevo
-
-Esto es como funcionan los kernels reales —se activan por interrupciones concretas, no andan mirando cada dos por tres.
+Nuestro scheduler solo despierta ante eventos específicos, no corre periódicamente desperdiciando CPU. Los tres eventos que lo activan son: (1) un proceso agota su TTL o ejecuta EXIT, liberando su hardware thread; (2) el quantum de un proceso expira en algoritmos con preemption (RR y Chocolate Caliente), requiriendo cambio de contexto; (3) el generador crea un proceso nuevo y lo encola, notificando que hay trabajo disponible.
 
 ```{.mermaid format=pdf}
 flowchart TD
-    CT[Clock Tick] --> MAC[machine_advance_cycle]
-    MAC --> LOOP{Para cada HW Thread}
-    LOOP --> EXEC[Ejecutar ciclo]
-    EXEC --> DEC[Decrementar TTL]
-    DEC --> INC[Incrementar ticks_since_swap]
-    INC --> TEMP[Actualizar temperatura]
-    TEMP --> EVENT{Detectar eventos}
-    EVENT -->|TTL == 0?| SCHED[scheduler_update_thread]
-    EVENT -->|Quantum expirado?| SCHED
-    EVENT -->|No| LOOP
-    SCHED --> LOOP
+    Start([Cada Tick]) --> MAC[machine_advance_cycle]
+    
+    MAC --> CheckThreads{Recorrer HW Threads}
+    CheckThreads --> E1{TTL = 0?}
+    CheckThreads --> E2{Quantum expirado?}
+    
+    E1 -->|Sí| SetFlag1[event_flag = true]
+    E2 -->|Sí| SetFlag2[event_flag = true]
+    E1 -->|No| Continue
+    E2 -->|No| Continue
+    
+    SetFlag1 --> Continue
+    SetFlag2 --> Continue
+    Continue --> MoreThreads{Más threads?}
+    MoreThreads -->|Sí| CheckThreads
+    MoreThreads -->|No| CheckFlag{event_flag?}
+    
+    ProcGen[Nuevo Proceso] --> Enqueue[process_queue_enqueue]
+    Enqueue --> SetFlag3[event_flag = true]
+    SetFlag3 --> CheckFlag
+    
+    CheckFlag -->|true| Signal[kernel_signal_scheduler]
+    CheckFlag -->|false| End([Continuar])
+    
+    Signal --> Wake[pthread_cond_broadcast]
+    Wake --> SchedWake[Scheduler despierta]
+    SchedWake --> Update[scheduler_update_thread]
+    Update --> End
+    
+    style E1 fill:#ffe1e1
+    style E2 fill:#ffe1e1
+    style ProcGen fill:#e1ffe1
+    style Wake fill:#e1f5ff
 ```
+
+Esta arquitectura es como funcionan los kernels reales. El scheduler no anda constantemente preguntando «pasó algo?» sino que duerme hasta que una interrupción concreta lo despierta: timer interrupt (quantum expirado), I/O completion (proceso desbloqueado), o fork/exec (proceso nuevo creado).
+
+La detección ocurre en `machine_advance_cycle()`: al recorrer todos los threads, comprobamos `TTL` $=0$ y `ticks_since_swap` $\geq$ `quantum`. Detectado un evento, seteamos una flag booleana. Al final del ciclo, si alguna flag está activa, llamamos a `kernel_signal_scheduler()` que hace broadcast a la variable de condición del scheduler, despertándolo instantáneamente.
 
 ### Detección de Eventos
 
-La función `machine_advance_cycle()` se ejecuta en cada tick del Clock. Recorre todos los hardware threads, decrementando el TTL de los procesos en ejecución e incrementando `ticks_since_swap`:
-
-```c
-void machine_advance_cycle(Kernel* kernel) {
-    for (cpu in all_cpus) {
-        for (core in cpu.cores) {
-            for (thread in core.hw_threads) {
-                PCB* current = thread->current_pcb;
-                
-                if (current && current->pid != 0 && current->ttl > 0) {
-                    current->ttl--;
-                    current->ticks_since_swap++;
-                    current->temperature++;
-                    
-                    // Detectar eventos
-                    if (current->ttl == 0) {
-                        kernel_signal_scheduler(kernel);
-                    } else if (quantum_expired(current, kernel->config)) {
-                        kernel_signal_scheduler(kernel);
-                    }
-                }
-            }
-        }
-    }
-}
-```
-
-La función `kernel_signal_scheduler()` despierta al hilo del scheduler, que bloquea la máquina (adquiere `machine->mutex`) y procesa todos los hardware threads afectados llamando a `scheduler_update_thread()`.
+En cada tick, `machine_advance_cycle()` recorre todos los hardware threads, decrementa TTL e incrementa `ticks_since_swap`. Si detecta `TTL` $=0$ o quantum expirado, llama a `kernel_signal_scheduler()` que despierta al scheduler.
 
 ### Interfaz del Scheduler
 
@@ -82,80 +75,74 @@ Esta función implementa la lógica de planificación para un hardware thread es
 
 ## Round Robin
 
-Round Robin es el clásico: quantum fijo y preemption obligatoria. Cada proceso recibe su quantum (por defecto 5 ticks, configurable con `-q`) y cuando se le acaba, fuera. Equitativo al máximo.
+Round Robin es el algoritmo más simple con preemption: todos los procesos reciben un quantum idéntico (configurable con `-q`, por defecto 5 ticks) y cuando se les acaba, obligatoriamente van al final de la cola. Equidad total.
 
 ### Implementación
 
-```c
-case SCHEDULER_ROUND_ROBIN:
-    if (current->ticks_since_swap >= kernel->config.rr_quantum) {
-        if (!process_queue_is_empty(kernel->process_queue)) {
-            // Desalojar proceso actual
-            current->state = PROCESS_STATE_READY;
-            current->cpu_id = -1;
-            current->core_id = -1;
-            current->hw_thread_id = -1;
-            process_queue_enqueue(kernel->process_queue, current);
-            
-            // Despachar siguiente proceso
-            PCB* next =
-                process_queue_dequeue(kernel->process_queue);
-            scheduler_dispatch(thread, next, cpu, core, hw_thread);
-            
-            LOG_INFO(LOG_COMPONENT_SCHEDULER,
-                    "(C%u:C%u:T%u) Preemption PID=%u -> PID=%u",
-                    cpu, core, hw_thread, current->pid, next->pid);
-            
-            kernel->context_switches++;
-        }
-    }
-    break;
+El scheduler comprueba `ticks_since_swap` $\geq$ `quantum` en cada evento. Si se cumple y hay procesos en cola, ejecuta preemption: cambia el estado del proceso actual a READY, resetea sus IDs de ubicación a -1, lo encola al final con `process_queue_enqueue()`, y despacha el primero de la cola con `process_queue_dequeue()`.
+
+```{.mermaid format=pdf}
+sequenceDiagram
+    participant MAC as machine_advance_cycle
+    participant PCB as Proceso Actual
+    participant S as Scheduler
+    participant Q as ProcessQueue
+    participant Next as Siguiente Proceso
+    participant T as HW Thread
+    
+    MAC->>PCB: ticks_since_swap++
+    MAC->>MAC: Verificar quantum
+    Note over MAC: ticks_since_swap >= quantum
+    MAC->>S: kernel_signal_scheduler()
+    
+    S->>S: scheduler_update_thread()
+    S->>Q: is_empty()?
+    Q-->>S: false (hay procesos)
+    
+    rect rgb(255, 240, 240)
+        Note over S,PCB: PREEMPTION
+        S->>PCB: state = READY
+        S->>PCB: cpu_id = -1
+        S->>PCB: core_id = -1  
+        S->>PCB: hw_thread_id = -1
+        S->>Q: enqueue(PCB)
+    end
+    
+    rect rgb(240, 255, 240)
+        Note over S,Next: DISPATCH
+        S->>Q: dequeue()
+        Q-->>S: Next
+        S->>Next: state = RUNNING
+        S->>Next: cpu_id, core_id, hw_thread_id
+        S->>Next: ticks_since_swap = 0
+        S->>T: current_pcb = Next
+        
+        alt Proceso con programa cargado
+            S->>T: mmu_set_ptbr(Next->mm.pgb)
+            S->>T: pc = Next->mm.code_start
+        end
+    end
 ```
 
-La función `scheduler_dispatch()` actualiza el estado del PCB y lo asigna al hardware thread:
+La función `scheduler_dispatch()` hace el trabajo pesado del context switch: setea el estado del PCB a RUNNING, asigna los IDs de ubicación (cpu_id, core_id, hw_thread_id), resetea `ticks_since_swap` a 0, y si el proceso tiene programa cargado, configura la MMU del thread actualizando el PTBR y el PC. Todo atómico, protegido por el mutex de la máquina.
 
-```c
-static void scheduler_dispatch(HWThread* thread, PCB* pcb,
-                               uint32_t cpu, uint32_t core,
-                               uint32_t hw_thread) {
-    pcb->state = PROCESS_STATE_RUNNING;
-    pcb->cpu_id = cpu;
-    pcb->core_id = core;
-    pcb->hw_thread_id = hw_thread;
-    pcb->ticks_since_swap = 0;
-    thread->current_pcb = pcb;
-}
-```
+Si la cola está vacía al expirar el quantum, el proceso continúa ejecutando. Esta decisión evita overhead innecesario: ¿para qué hacer preemption si no hay nadie esperando? El proceso sigue hasta que termine o llegue alguien nuevo.
 
 ### Características
 
-**Ventajas**:
-- Equidad garantizada: todos los procesos reciben el mismo quantum
+**Ventajas:**
+
+- Equidad absoluta: todos reciben el mismo quantum
 - Buen tiempo de respuesta para procesos interactivos
 - Simplicidad conceptual
 
-**Desventajas**:
-- Overhead de context switches frecuentes
-- Quantum pequeño incrementa overhead, quantum grande deteriora tiempo de respuesta
-- No considera prioridades ni comportamiento de procesos
+**Desventajas:**
 
-### Resultados de Pruebas
+- Overhead elevado por context switches frecuentes
+- Dilema del quantum: valores pequeños mejoran respuesta pero aumentan overhead; valores grandes reducen overhead pero deterioran interactividad
+- No considera prioridades ni tipo de proceso (I/O-bound vs CPU-bound)
 
-Configuración: 1 CPU, 1 core, 1 thread, quantum=4 ticks, generación cada 5 ticks.
-
-```plaintext
-[SCH] (0:0:0) Dispatch PID=1 (Reemplazando IDLE) TTL=0
-[SCH] (0:0:0) Preemption PID=1 -> PID=2
-[SCH] (0:0:0) Preemption PID=2 -> PID=1
-[SCH] (0:0:0) Preemption PID=1 -> PID=2
-[SCH] (0:0:0) Preemption PID=2 -> PID=3
-[SCH] (0:0:0) Preemption PID=3 -> PID=1
-```
-
-Observaciones:
-- Preemption ocurre exactamente cada 4 ticks (quantum configurado)
-- Los procesos rotan en orden FIFO (cola justa)
-- Cada cambio de contexto se contabiliza correctamente
+**Resultados:** Quantum=4 ticks produce preemption exacta cada 4 ticks, los procesos rotan estrictamente en orden FIFO, y los context switches se contabilizan correctamente.
 
 ## FIFO (First In First Out)
 
@@ -163,60 +150,23 @@ FIFO es lo más simple que hay: los procesos se ejecutan hasta terminar, sin pre
 
 ### Implementación
 
-```c
-case SCHEDULER_FIFO:
-    // Solo hay scheduling cuando el proceso termina
-    if (current->ttl == 0 ||
-        current->state == PROCESS_STATE_TERMINATED) {
-        pcb_destroy(current);
-        thread->current_pcb = NULL;
-        
-        // Despachar siguiente proceso
-        PCB* next = process_queue_dequeue(kernel->process_queue);
-        if (next) {
-            scheduler_dispatch(thread, next, cpu, core, hw_thread);
-            LOG_INFO(LOG_COMPONENT_SCHEDULER,
-                    "(C%u:C%u:T%u) Dispatch PID=%u (TTL=%u)",
-                    cpu, core, hw_thread, next->pid, next->ttl);
-            kernel->context_switches++;
-        } else {
-            thread->current_pcb = pcb_create_idle();
-            LOG_DEBUG(LOG_COMPONENT_SCHEDULER,
-                     "(C%u:C%u:T%u) IDLE",
-                     cpu, core, hw_thread);
-        }
-    }
-    break;
-```
+Solo planifica cuando el proceso termina (TTL=0). Destruye el PCB actual, despacha el siguiente de la cola, o crea un IDLE si no hay procesos.
 
 ### Características
 
-**Ventajas**:
+**Ventajas:**
+
 - Overhead mínimo (sin context switches salvo terminación)
-- Orden predecible (estricto FIFO)
-- Máxima utilización de CPU
+- Orden totalmente predecible (estricto first-come-first-served)
+- Maximiza utilización de CPU
 
-**Desventajas**:
-- Procesos largos bloquean a los cortos (convoy effect)
-- Tiempo de respuesta terrible para procesos interactivos
-- No hay equidad temporal
+**Desventajas:**
 
-### Resultados de Pruebas
+- Convoy effect severo: procesos largos bloquean indefinidamente a los cortos
+- Tiempo de respuesta desastroso para procesos interactivos
+- Equidad temporal inexistente
 
-Configuración: 1 CPU, 1 core, 1 thread, generación cada 5 ticks.
-
-```plaintext
-[SCH] (0:0:0) Dispatch PID=1 (Reemplazando IDLE) TTL=42
-[SCH] (0:0:0) Process PID=1 terminated
-[SCH] (0:0:0) Dispatch PID=2 (TTL=15)
-[SCH] (0:0:0) Process PID=2 terminated
-[SCH] (0:0:0) Dispatch PID=3 (TTL=88)
-```
-
-Observaciones:
-- Cada proceso se ejecuta hasta completar su TTL
-- Context switch solo al terminar
-- Procesos en cola esperan hasta que el actual termine
+**Resultados:** Cada proceso ejecuta hasta agotar su TTL completo, context switch solo al terminar. Los procesos en cola esperan hasta que el actual termine, convoy effect claramente visible en las trazas.
 
 ## Chocolate Caliente
 
@@ -224,104 +174,118 @@ Este es nuestro algoritmo original, y nos gusta bastante. La idea es simple: ima
 
 ### Modelo de Temperatura
 
-Cada PCB mantiene un campo `temperature` que se actualiza según estas reglas:
+Cada proceso tiene una temperatura que evoluciona dinámicamente según dos reglas:
 
-```c
-// Mientras el proceso ejecuta, se calienta
-current->temperature++;  // +1°C por tick ejecutado
+**Calentamiento (+1°C por tick):**
 
-// Cuando un proceso espera en cola, se enfría
-if (waiting->temperature >= 5) {
-    waiting->temperature -= 5;  // -5°C por cada context switch
-}
+- Ocurre mientras el proceso ejecuta en un hardware thread
+- Es lineal y acumulativo, sin límite superior
+- Captura cuánto CPU ha consumido recientemente
+
+**Enfriamiento (-5°C por context switch):**
+
+- Ocurre **solo cuando el proceso es desalojado**, NO mientras espera en cola
+- Es un evento discreto: -5°C en el momento exacto del context switch
+- Implementación: tras cada preemption, el scheduler recorre toda la ProcessQueue desencolando y reencolando cada PCB, restándole 5°C a su temperatura (con mínimo 0°C)
+- Este recorrido O(n) es caro pero esencial para que procesos esperando recuperen quantums largos al ser redespachados
+
+**Traducción temperatura → quantum:**
+
+La temperatura se mapea a quantum mediante cinco umbrales:
+
+- **< 20°C** (frío): 200% del quantum base
+- **20-39°C** (templado): 120% del quantum base
+- **40-59°C** (caliente): 80% del quantum base
+- **60-79°C** (muy caliente): 40% del quantum base
+- **≥ 80°C** (ardiendo): 20% del quantum base
+
+```{.mermaid format=pdf}
+flowchart TD
+    Start([Dispatch temp=0]) --> Frio
+    
+    Frio["Frio: temp < 20\nQuantum = 10 ticks"]
+    Templado["Templado: 20-39\nQuantum = 6 ticks"]
+    Caliente["Caliente: 40-59\nQuantum = 4 ticks"]
+    MuyCaliente["Muy Caliente: 60-79\nQuantum = 2 ticks"]
+    Ardiendo["Ardiendo: temp >= 80\nQuantum = 1 tick"]
+    
+    Frio -->|+1C por tick| Templado
+    Templado -->|+1C por tick| Caliente
+    Caliente -->|+1C por tick| MuyCaliente
+    MuyCaliente -->|+1C por tick| Ardiendo
+    
+    Frio -->|Preemption -5C| Cola
+    Templado -->|Preemption -5C| Cola
+    Caliente -->|Preemption -5C| Cola
+    MuyCaliente -->|Preemption -5C| Cola
+    Ardiendo -->|Preemption -5C| Cola
+    
+    Cola["En Cola\n(sin cambio temp)"]
+    
+    Cola -->|Re-dispatch| Frio
+    Cola -->|Re-dispatch| Templado
+    Cola -->|Re-dispatch| Caliente
+    Cola -->|Re-dispatch| MuyCaliente
+    Cola -->|Re-dispatch| Ardiendo
+    
+    style Frio fill:#e1f5ff
+    style Templado fill:#e1ffe1
+    style Caliente fill:#fff4e1
+    style MuyCaliente fill:#ffe1e1
+    style Ardiendo fill:#ff9999
+    style Cola fill:#f0f0f0
 ```
+
+**Efecto neto:** Procesos nuevos o que esperaron mucho (fríos) reciben quantums generosos, mientras que procesos que monopolizan CPU (calientes) reciben quantums cortos. Este comportamiento favorece automáticamente procesos interactivos (I/O-bound) sobre procesos CPU-bound.
 
 ### Cálculo del Quantum
 
-El quantum máximo se calcula en función de la temperatura actual:
-
-```c
-static uint32_t get_max_quantum_by_temperature(
-    uint32_t temperature,
-    uint32_t quantum_base) {
-    uint32_t base = (quantum_base > 0) ? quantum_base : 5;
-    
-    if (temperature >= 80)
-        return (base * 1) / 5;  // 20% (ardiendo)
-    if (temperature >= 60)
-        return (base * 2) / 5;  // 40% (muy caliente)
-    if (temperature >= 40)
-        return (base * 4) / 5;  // 80% (caliente)
-    if (temperature >= 20)
-        return (base * 6) / 5;  // 120% (templado)
-    return base * 2;            // 200% (frío)
-}
-```
-
 Con `quantum_base=5` (por defecto):
 
-| Temperatura | Quantum | Estado |
-|-------------|---------|--------|
-| < 20°C      | 10 ticks | Frío |
-| 20-39°C     | 6 ticks | Templado |
-| 40-59°C     | 4 ticks | Caliente |
-| 60-79°C     | 2 ticks | Muy caliente |
-| ≥ 80°C      | 1 tick  | Ardiendo |
+| Temperatura | Quantum | Factor | Estado |
+|-------------|---------|--------|---------|
+| $< 20°C$    | 10 ticks | 200%  | Frío |
+| $20-39°C$   | 6 ticks  | 120%  | Templado |
+| $40-59°C$   | 4 ticks  | 80%   | Caliente |
+| $60-79°C$   | 2 ticks  | 40%   | Muy caliente |
+| $\geq 80°C$ | 1 tick   | 20%   | Ardiendo |
+
+**Ejemplo de evolución:**
+
+```plaintext
+Tick  Temp  Quantum  Acción
+----------------------------------------
+0     0°C   10       Proceso despachado (frío)
+5     5°C   10       Ejecutando...
+10    10°C  10       Quantum agotado → Preemption
+      5°C   10       Enfriado en cola (-5°C)
+15    15°C  10       Re-despachado
+25    25°C  6        Quantum agotado (templado)
+      20°C  10       Enfriado en cola
+30    30°C  6        Re-despachado
+...
+90    90°C  1        Ardiendo! (quantum mínimo)
+```
+
+La función `get_max_quantum_by_temperature()` implementa la tabla:
+
+```c
+if (temp >= 80) return (base * 1) / 5;  // 20%
+if (temp >= 60) return (base * 2) / 5;  // 40%
+if (temp >= 40) return (base * 4) / 5;  // 80%
+if (temp >= 20) return (base * 6) / 5;  // 120%
+return base * 2;                         // 200%
+```
 
 ### Implementación
 
-```c
-case SCHEDULER_CHOCOLATE_CALIENTE:
-    uint32_t max_quantum = get_max_quantum_by_temperature(
-        current->temperature, kernel->config.rr_quantum);
-    
-    LOG_DEBUG(LOG_COMPONENT_SCHEDULER,
-             "PID=%u Temp=%u°C %s Quantum=%u "
-             "Ticks=%u/%u TTL=%u",
-             current->pid, current->temperature,
-             get_temperature_emoji(current->temperature),
-             max_quantum, current->ticks_since_swap,
-             max_quantum, current->ttl);
-    
-    if (current->ticks_since_swap >= max_quantum) {
-        if (!process_queue_is_empty(kernel->process_queue)) {
-            // Desalojar actual
-            current->state = PROCESS_STATE_READY;
-            current->cpu_id = -1;
-            current->core_id = -1;
-            current->hw_thread_id = -1;
-            process_queue_enqueue(kernel->process_queue, current);
-            
-            // Despachar siguiente
-            PCB* next =
-                process_queue_dequeue(kernel->process_queue);
-            scheduler_dispatch(thread, next, cpu, core, hw_thread);
-            
-            LOG_INFO(LOG_COMPONENT_SCHEDULER,
-                    "(C%u:C%u:T%u) Preemption "
-                    "PID=%u (Temp=%u°C) -> PID=%u (Temp=%u°C)",
-                    cpu, core, hw_thread,
-                    current->pid, current->temperature,
-                    next->pid, next->temperature);
-            
-            kernel->context_switches++;
-            
-            // Enfriar procesos en cola
-            uint32_t queue_size =
-                process_queue_size(kernel->process_queue);
-            for (uint32_t i = 0; i < queue_size; i++) {
-                PCB* waiting =
-                    process_queue_dequeue(kernel->process_queue);
-                if (waiting->temperature >= 5) {
-                    waiting->temperature -= 5;
-                }
-                process_queue_enqueue(kernel->process_queue,
-                                      waiting);
-            }
-        }
-    }
-    break;
-```
+Chocolate Caliente extiende Round Robin añadiendo cálculo dinámico del quantum. En cada evento, calcula el quantum máximo permitido para el proceso actual según su temperatura usando `get_max_quantum_by_temperature()`. Luego compara `ticks_since_swap` con ese quantum calculado.
+
+Si se agota y hay cola no vacía, ejecuta preemption igual que RR: desaloja actual, encola, despacha siguiente. La diferencia está en el paso adicional de enfriamiento: tras despachar el siguiente proceso, recorre toda la ProcessQueue desencolando y reencolando cada PCB, restándole 5°C a su temperatura (con mínimo 0).
+
+Este enfriamiento global tras cada context switch es caro (O(n) donde n=tamaño de cola), pero crítico para el comportamiento del algoritmo. Sin él, procesos esperando no recuperarían quantums largos. La implementación usa dequeue/enqueue para recorrer, manteniendo el orden FIFO.
+
+La temperatura también se incrementa en `machine_advance_cycle()` para procesos en RUNNING: +1°C por tick. Esto significa que el calentamiento es automático (no requiere lógica del scheduler), mientras que el enfriamiento es explícito (requiere acción del scheduler).
 
 ### Comportamiento
 
@@ -337,26 +301,7 @@ Y penaliza a:
 
 ### Resultados de Pruebas
 
-Configuración: 1 CPU, 1 core, 1 thread, quantum_base=5, generación cada 5 ticks.
-
-```plaintext
-[SCH] PID=1 Temp=4°C Quantum=10 Ticks=4/10 TTL=46
-[SCH] PID=1 Temp=10°C Quantum=10 Ticks=10/10 TTL=40
-[SCH] (0:0:0) Preemption PID=1 (Temp=10°C) -> PID=2 (Temp=0°C)
-[SCH] PID=2 Temp=6°C Quantum=10 Ticks=6/10 TTL=12
-[SCH] PID=2 Temp=10°C Quantum=10 Ticks=10/10 TTL=6
-[SCH] (0:0:0) Preemption PID=2 (Temp=10°C) -> PID=3 (Temp=0°C)
-[SCH] PID=3 Temp=8°C Quantum=10 Ticks=8/10 TTL=80
-[SCH] PID=3 Temp=16°C Quantum=10 Ticks=10/10 TTL=72
-[SCH] (0:0:0) Preemption PID=3 (Temp=16°C) -> PID=1 (Temp=5°C)
-[SCH] PID=1 Temp=6°C Quantum=10 Ticks=1/10 TTL=39
-```
-
-Observaciones:
-- Procesos nuevos empiezan con temperatura 0°C (quantum máximo)
-- La temperatura sube 1°C por tick ejecutado
-- Procesos desalojados se enfrían -5°C al esperar en cola
-- El quantum se recalcula dinámicamente según temperatura actual
+Quantum adaptativo funciona: procesos fríos reciben 10 ticks, procesos ardiendo solo 1 tick. La temperatura incrementa durante ejecución y disminuye (-5°C) al esperar en cola. Balance entre equidad y eficiencia visible en las trazas.
 
 ### Análisis Comparativo
 
@@ -373,76 +318,25 @@ Chocolate Caliente encontró un buen balance:
 
 ## Integración con el Kernel
 
-El scheduler se ejecuta en su propio hilo que se despierta solo cuando se señaliza un evento:
+### Hilo del Scheduler
 
-```c
-static void* scheduler_thread_func(void* arg) {
-    Kernel* kernel = (Kernel*)arg;
-    
-    while (kernel_is_running(kernel)) {
-        // Bloquearse hasta que haya un evento
-        kernel_wait_scheduler_signal(kernel);
-        
-        if (!kernel_is_running(kernel)) break;
-        
-        // Bloquear la máquina durante scheduling
-        machine_lock(kernel->machine);
-        
-        // Procesar todos los hardware threads
-        for (uint32_t cpu = 0; cpu < kernel->config.num_cpus; cpu++) {
-            for (uint32_t core = 0;
-                 core < kernel->config.num_cores_per_cpu; core++) {
-                for (uint32_t thread = 0;
-                     thread < kernel->config.num_hw_threads_per_core;
-                     thread++) {
-                    HWThread* hw_thread = machine_get_thread(
-                        kernel->machine, cpu, core, thread);
-                    
-                    scheduler_update_thread(kernel, hw_thread,
-                                           cpu, core, thread);
-                }
-            }
-        }
-        
-        // Desbloquear la máquina
-        machine_unlock(kernel->machine);
-    }
-    
-    return NULL;
-}
-```
+El scheduler implementa el patrón productor-consumidor clásico. El hilo `scheduler_thread` arranca en `kernel_start()` y entra inmediatamente en un bucle donde se bloquea en `pthread_cond_wait()` sobre `scheduler_cond`. Ahí duerme sin consumir CPU hasta que alguien lo despierte.
 
-La señalización se hace mediante mutex + condvar:
+Los productores son `machine_advance_cycle()` (detecta quantum expirado o `TTL` $=0$) y `process_gen_thread` (crea proceso nuevo). Ambos llaman a `kernel_signal_scheduler()` que hace `pthread_cond_signal()` o `pthread_cond_broadcast()`, despertando al scheduler instantáneamente.
 
-```c
-void kernel_signal_scheduler(Kernel* kernel) {
-    pthread_mutex_lock(&kernel->scheduler_mutex);
-    kernel->scheduler_signal = 1;
-    pthread_cond_signal(&kernel->scheduler_cond);
-    pthread_mutex_unlock(&kernel->scheduler_mutex);
-}
+Al despertar, el scheduler adquiere el mutex de la máquina con `machine_lock()`, bloqueando toda modificación concurrente. Recorre todos los hardware threads llamando a `scheduler_update_thread()` para cada uno, que aplica la lógica del algoritmo configurado (FIFO/RR/CH). Tras procesar todos los threads, libera el mutex con `machine_unlock()` y vuelve a bloquearse esperando el próximo evento.
 
-void kernel_wait_scheduler_signal(Kernel* kernel) {
-    pthread_mutex_lock(&kernel->scheduler_mutex);
-    while (!kernel->scheduler_signal &&
-           kernel_is_running(kernel)) {
-        pthread_cond_wait(&kernel->scheduler_cond,
-                         &kernel->scheduler_mutex);
-    }
-    kernel->scheduler_signal = 0;
-    pthread_mutex_unlock(&kernel->scheduler_mutex);
-}
-```
+Este diseño serializa completamente el scheduling: solo un scheduler puede correr a la vez, y mientras corre, nadie puede modificar la máquina. Esto simplifica enormemente la sincronización eliminando race conditions complejas. En kernels reales se usan estructuras lock-free y per-CPU runqueues, pero para un simulador didáctico la claridad prima sobre la performance.
 
 ## Decisiones de Diseño
 
 ### Event-Driven vs Periódico
 
-Se ha optado por un scheduler event-driven en lugar de uno que se ejecute periódicamente. Esta decisión reduce el overhead de CPU (el scheduler solo trabaja cuando es necesario) y refleja mejor el comportamiento de kernels reales donde el scheduler es invocado por interrupciones específicas (timer interrupt, I/O completion, etc.).
+Optamos por un scheduler event-driven en lugar de uno que se ejecute periódicamente. Esto reduce el overhead de CPU (el scheduler solo trabaja cuando hace falta) y refleja mejor el comportamiento de kernels reales donde el scheduler es invocado por interrupciones específicas (timer interrupt, I/O completion, etc.).
 
 ### Temperatura como Métrica
 
-La elección de temperatura como métrica para Chocolate Caliente (en lugar de prioridades estáticas o aging clásico) se ha tomado por su simplicidad conceptual y efectividad práctica. La temperatura captura implícitamente el comportamiento del proceso: procesos CPU-bound se calientan rápido, procesos I/O-bound se mantienen fríos.
+Elegimos temperatura como métrica para Chocolate Caliente (en lugar de prioridades estáticas o aging clásico) por su simplicidad conceptual y efectividad práctica. La temperatura captura implícitamente el comportamiento del proceso: procesos CPU-bound se calientan rápido, procesos I/O-bound se mantienen fríos.
 
 ### Enfriamiento Proporcional
 
