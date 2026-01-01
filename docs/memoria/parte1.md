@@ -8,7 +8,7 @@ La primera parte del proyecto establece los fundamentos del simulador: el motor 
 
 El sistema implementa una arquitectura modular donde cada componente tiene responsabilidades claramente definidas. El Kernel actúa como orquestador principal, coordinando el Clock que genera ticks periódicos, la Machine que simula la arquitectura hardware, y el Scheduler event-driven que responde a eventos específicos.
 
-```mermaid
+```{.mermaid format=pdf}
 graph TD
     K[Kernel] --> C[Clock]
     K --> M[Machine]
@@ -215,7 +215,7 @@ void process_queue_enqueue(ProcessQueue* queue, PCB* pcb)
 
 La Machine representa la arquitectura física del sistema con una jerarquía de tres niveles:
 
-```mermaid
+```{.mermaid format=pdf}
 graph TD
     M[Machine] --> CPU0[CPU 0]
     M --> CPU1[CPU 1]
@@ -437,11 +437,11 @@ Salida esperada:
 
 La arquitectura base establece:
 
-✅ Motor de tiempo funcional y configurable  
-✅ Generación automática de procesos  
-✅ Sincronización correcta entre componentes  
-✅ Estructura modular extensible  
-✅ Detección de eventos para scheduling  
+Motor de tiempo funcional y configurable  
+Generación automática de procesos  
+Sincronización correcta entre componentes  
+Estructura modular extensible  
+Detección de eventos para scheduling  
 
 Esta base sólida permite implementar algoritmos de scheduling sofisticados en la Parte 2.
 

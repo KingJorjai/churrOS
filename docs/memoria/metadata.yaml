@@ -1,0 +1,22 @@
+---
+title: "churrOS - Simulador de Kernel con Scheduling Adaptativo"
+subtitle: "Práctica de Sistemas Operativos"
+author: "Jorge Arévalo Fernández"
+date: "Enero 2025"
+lang: es-ES
+documentclass: article
+papersize: a4
+geometry:
+  - margin=2.5cm
+mainfont: Liberation Serif
+monofont: Liberation Mono
+fontsize: 11pt
+numbersections: true
+toc: true
+toc-depth: 2
+header-includes: |
+  \usepackage{fancyhdr}
+  \pagestyle{fancy}
+  \fancyhead[L]{churrOS}
+  \fancyhead[R]{\thepage}
+---

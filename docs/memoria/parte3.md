@@ -15,7 +15,7 @@ La tercera parte del proyecto implementa un sistema completo de gestión de memo
 
 El sistema utiliza un bus de direcciones de 24 bits (2^24 = 16MB total) dividido en dos regiones principales: Kernel Space (0x000000-0x0FFFFF, 1MB) que aloja tablas de páginas y estructuras del kernel, y User Space (0x100000-0xFFFFFF, 15MB) que contiene código, datos y stack de procesos.
 
-```mermaid
+```{.mermaid format=pdf}
 graph TD
     AS["Address Space: 16MB (2^24)"] --> KS["Kernel Space: 1MB"]
     AS --> US["User Space: 15MB"]
@@ -111,29 +111,17 @@ El bitmap `free_frames` implementa un allocator simple:
 
 ### Algoritmo Completo
 
-```
-┌─────────────────────────────────────────────────┐
-│ 1. CPU genera dirección virtual VA               │
-│    ↓                                             │
-│ 2. Extraer VPN = VA[23:12]                       │
-│    ↓                                             │
-│ 3. Buscar VPN en TLB                             │
-│    ├─ Hit  → PFN encontrado (go to 7)            │
-│    └─ Miss → continuar                           │
-│    ↓                                             │
-│ 4. Leer PTBR (base de Page Table)                │
-│    ↓                                             │
-│ 5. Acceder PageTable[VPN]                        │
-│    ├─ valid==0 → Page Fault                      │
-│    └─ valid==1 → continuar                       │
-│    ↓                                             │
-│ 6. Obtener PFN, actualizar TLB                   │
-│    ↓                                             │
-│ 7. Calcular dirección física:                    │
-│    PA = (PFN << 12) | Offset                     │
-│    ↓                                             │
-│ 8. Acceder memoria física en PA                  │
-└─────────────────────────────────────────────────┘
+```{.mermaid format=pdf}
+flowchart TD
+    A["1. CPU genera dirección virtual VA"] --> B["2. Extraer VPN = VA[23:12]"]
+    B --> C["3. Buscar VPN en TLB"]
+    C -->|Hit| G["7. Calcular dirección física:<br/>PA = (PFN << 12) | Offset"]
+    C -->|Miss| D["4. Leer PTBR (base de Page Table)"]
+    D --> E["5. Acceder PageTable[VPN]"]
+    E -->|valid==0| F1["Page Fault"]
+    E -->|valid==1| F2["6. Obtener PFN, actualizar TLB"]
+    F2 --> G
+    G --> H["8. Acceder memoria física en PA"]
 ```
 
 ### Implementación
@@ -712,13 +700,13 @@ Complejidad: O(n), pero simple y suficiente para simulador educativo.
 
 La implementación de gestión de memoria virtual demuestra:
 
-✅ **Paginación completa**: Sistema de paginación de 4KB funcional  
-✅ **MMU con TLB**: Traducción de direcciones con cache  
-✅ **Loader funcional**: Carga de programas desde archivos `.elf`  
-✅ **Instruction set básico**: Ejecución de LD, ST, ADD, EXIT  
-✅ **Prometheus**: Generador de programas de prueba reproducibles  
-✅ **Integración con scheduler**: Cambio de contexto incluye cambio de PTBR  
-✅ **Estadísticas de rendimiento**: TLB hit rate, page faults, etc.  
+**Paginación completa**: Sistema de paginación de 4KB funcional  
+**MMU con TLB**: Traducción de direcciones con cache  
+**Loader funcional**: Carga de programas desde archivos `.elf`  
+**Instruction set básico**: Ejecución de LD, ST, ADD, EXIT  
+**Prometheus**: Generador de programas de prueba reproducibles  
+**Integración con scheduler**: Cambio de contexto incluye cambio de PTBR  
+**Estadísticas de rendimiento**: TLB hit rate, page faults, etc.  
 
 El sistema simula fielmente el funcionamiento de un MMU real y proporciona una base sólida para extensiones futuras (swapping, protección, memoria compartida).
 

@@ -14,7 +14,7 @@ Se han implementado tres algoritmos de scheduling:
 
 El scheduler de churrOS implementa un diseño completamente event-driven que solo se activa cuando ocurren eventos específicos: proceso termina (TTL == 0 o EXIT ejecutado), quantum expira (solo en RR y CH), o se crea un nuevo proceso. Este enfoque refleja el comportamiento de kernels reales donde el scheduler es invocado por interrupciones específicas.
 
-```mermaid
+```{.mermaid format=pdf}
 flowchart TD
     CT[Clock Tick] --> MAC[machine_advance_cycle]
     MAC --> LOOP{Para cada HW Thread}
@@ -100,10 +100,10 @@ case SCHEDULER_FIFO:
 ```
 
 Validaciones realizadas:
-- ✅ No hay preemption por tiempo (solo al terminar)
-- ✅ Orden FIFO respetado
-- ✅ Context switches mínimos
-- ✅ Convoy effect observable en logs
+- No hay preemption por tiempo (solo al terminar)
+- Orden FIFO respetado
+- Context switches mínimos
+- Convoy effect observable en logs
 
 ## Chocolate Caliente (CH) - Innovación Propia
 
@@ -146,23 +146,23 @@ static uint32_t get_max_quantum_by_temperature(uint32_t temperature,
 {
     uint32_t base = (quantum_base > 0) ? quantum_base : 5;
     
-    if (temperature >= 80) return (base * 1) / 5;  // 20% - Ardiendo 🔥
-    if (temperature >= 60) return (base * 2) / 5;  // 40% - Muy caliente 🔴
-    if (temperature >= 40) return (base * 4) / 5;  // 80% - Caliente 🟡
-    if (temperature >= 20) return (base * 6) / 5;  // 120% - Templado 🟢
-    return base * 2;                                // 200% - Frío ❄️
+    if (temperature >= 80) return (base * 1) / 5;  // 20% - Ardiendo
+    if (temperature >= 60) return (base * 2) / 5;  // 40% - Muy caliente
+    if (temperature >= 40) return (base * 4) / 5;  // 80% - Caliente
+    if (temperature >= 20) return (base * 6) / 5;  // 120% - Templado
+    return base * 2;                                // 200% - Frío
 }
 ```
 
 Con `quantum_base=5` (default):
 
-| Temperatura | Estado | Emoji | Quantum | Significado |
-|------------|--------|-------|---------|-------------|
-| < 20°C | Frío | ❄️ | 10 ticks | Ha esperado mucho, merece tiempo |
-| 20-39°C | Templado | 🟢 | 6 ticks | Balance normal |
-| 40-59°C | Caliente | 🟡 | 4 ticks | Ha usado bastante CPU |
-| 60-79°C | Muy caliente | 🔴 | 2 ticks | Ha acaparado CPU |
-| ≥ 80°C | Ardiendo | 🔥 | 1 tick | Penalización máxima |
+| Temperatura | Estado | Quantum | Significado |
+|------------|--------|---------|-------------|
+| < 20°C | Frío | 10 ticks | Ha esperado mucho, merece tiempo |
+| 20-39°C | Templado | 6 ticks | Balance normal |
+| 40-59°C | Caliente | 4 ticks | Ha usado bastante CPU |
+| 60-79°C | Muy caliente | 2 ticks | Ha acaparado CPU |
+| ≥ 80°C | Ardiendo | 1 tick | Penalización máxima |
 
 ### Parámetro `quantum_base` Configurable
 
@@ -262,21 +262,21 @@ El algoritmo tiene comportamientos interesantes:
 ```
 
 Validaciones realizadas:
-- ✅ Temperatura aumenta mientras ejecuta
-- ✅ Temperatura disminuye mientras espera
-- ✅ Quantum se ajusta según temperatura
-- ✅ Procesos fríos reciben más tiempo
-- ✅ Procesos calientes son preemptados rápido
-- ✅ quantum_base escala correctamente todos los quantums
+- Temperatura aumenta mientras ejecuta
+- Temperatura disminuye mientras espera
+- Quantum se ajusta según temperatura
+- Procesos fríos reciben más tiempo
+- Procesos calientes son preemptados rápido
+- quantum_base escala correctamente todos los quantums
 
 ### Ejemplo de Salida
 
 ```
-[INFO] [Sched] ❄️ Dispatch PID=5 temp=0°C quantum=10 TTL=67
-[NOTICE] [Sched] 🟢 PID=5 Preempted temp=22°C quantum=6→6 ticks
-[INFO] [Sched] 🟡 Dispatch PID=5 temp=45°C quantum=4 TTL=55
-[NOTICE] [Sched] 🔴 PID=5 Preempted temp=68°C quantum=4→2 ticks
-[INFO] [Sched] 🔥 Dispatch PID=5 temp=85°C quantum=1 TTL=48
+[INFO] [Sched] Dispatch PID=5 temp=0°C quantum=10 TTL=67
+[NOTICE] [Sched] PID=5 Preempted temp=22°C quantum=6→6 ticks
+[INFO] [Sched] Dispatch PID=5 temp=45°C quantum=4 TTL=55
+[NOTICE] [Sched] PID=5 Preempted temp=68°C quantum=4→2 ticks
+[INFO] [Sched] Dispatch PID=5 temp=85°C quantum=1 TTL=48
 ```
 
 Se observa claramente cómo el proceso se calienta progresivamente y su quantum se reduce.
@@ -408,8 +408,8 @@ Componentes disponibles:
 ```
 [INFO] [Kernel] Starting simulation...
 [INFO] [Clock] (0:0:0) Tick 1
-[INFO] [Sched] (0:0:0) ❄️ Dispatch PID=1 temp=0°C quantum=10 TTL=45
-[NOTICE] [Sched] (0:0:0) 🟢 PID=1 Preempted temp=24°C quantum=6→6 ticks
+[INFO] [Sched] (0:0:0) Dispatch PID=1 temp=0°C quantum=10 TTL=45
+[NOTICE] [Sched] (0:0:0) PID=1 Preempted temp=24°C quantum=6→6 ticks
 [DEBUG] [Memory] (0:0:0) TLB hit for VPN=0x123
 ```
 
@@ -443,9 +443,9 @@ Cada test verifica condiciones específicas usando `grep`:
 # Ejemplo: Validar que ocurre preemption en RR
 ./build/churros -a rr -q 5 -d 50 2>&1 | grep -i "preempt" > /dev/null
 if [ $? -eq 0 ]; then
-    echo "✓ Preemption detectada"
+    echo "[OK] Preemption detectada"
 else
-    echo "✗ No hay preemption"
+    echo "[ERROR] No hay preemption"
 fi
 ```
 
@@ -453,12 +453,12 @@ fi
 
 La implementación del scheduler demuestra:
 
-✅ **Arquitectura event-driven funcional**: El scheduler solo se activa por eventos  
-✅ **Tres algoritmos completos**: RR, FIFO y CH totalmente funcionales  
-✅ **Quantum adaptativo innovador**: Chocolate Caliente es una contribución original  
-✅ **Testing exhaustivo**: 30 tests automatizados validan comportamiento  
-✅ **Logging sofisticado**: Sistema multi-nivel con colores y ubicación  
-✅ **Comparativas empíricas**: Datos reales de fairness, overhead y convoy effect  
+**Arquitectura event-driven funcional**: El scheduler solo se activa por eventos  
+**Tres algoritmos completos**: RR, FIFO y CH totalmente funcionales  
+**Quantum adaptativo innovador**: Chocolate Caliente es una contribución original  
+**Testing exhaustivo**: 30 tests automatizados validan comportamiento  
+**Logging sofisticado**: Sistema multi-nivel con colores y ubicación  
+**Comparativas empíricas**: Datos reales de fairness, overhead y convoy effect  
 
 El sistema cumple todos los requisitos de un scheduler de SO educativo y añade innovaciones (CH) que lo distinguen.
 
