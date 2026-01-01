@@ -6,98 +6,33 @@ La primera parte del proyecto establece los fundamentos del simulador: el motor 
 
 ## Arquitectura General
 
-El sistema está organizado en una arquitectura modular con responsabilidades claramente separadas:
+El sistema implementa una arquitectura modular donde cada componente tiene responsabilidades claramente definidas. El Kernel actúa como orquestador principal, coordinando el Clock que genera ticks periódicos, la Machine que simula la arquitectura hardware, y el Scheduler event-driven que responde a eventos específicos.
 
+```mermaid
+graph TD
+    K[Kernel] --> C[Clock]
+    K --> M[Machine]
+    K --> S[Scheduler]
+    K --> T[Timer]
+    K --> PQ[Process Queue]
+    
+    C --> M
+    T --> PG[Process Generator]
+    PG --> PQ
+    M --> S
+    
+    M --> CPU[CPUs]
+    CPU --> Core[Cores]
+    Core --> HWT[HW Threads]
+    
+    S -.evento.-> M
 ```
-┌──────────────────────────────────────────────────────────┐
-│                     Kernel (main)                         │
-├──────────────────────────────────────────────────────────┤
-│  Clock → Machine → Detección de Eventos                   │
-│    ↓        ↓                   ↓                         │
-│  Timer → Process Gen     Scheduler (event-driven)         │
-│                                                           │
-│  Machine (CPUs → Cores → HW Threads)                      │
-│  Process Queue (PCBs)                                     │
-│                                                           │
-│  Eventos: Quantum expirado, Proceso termina,              │
-│           Nuevo proceso creado                            │
-└──────────────────────────────────────────────────────────┘
-```
 
-### Componentes Principales
-
-1. **Kernel**: Orquestador principal que mantiene el estado global
-2. **Clock**: Motor de tiempo que genera ciclos de ejecución
-3. **Timer**: Temporizador para interrupciones periódicas
-4. **Process Generator**: Generador aleatorio de procesos
-5. **Process Queue**: Cola thread-safe de PCBs
-6. **Machine**: Simulación de la arquitectura hardware
-7. **Scheduler**: Planificador event-driven de procesos
+Los eventos principales del sistema incluyen quantum expirado, proceso terminado y creación de nuevo proceso, todos gestionados de forma asíncrona mediante señalización.
 
 ## Clock: Motor del Sistema
 
-### Diseño
-
-El Clock es el corazón del simulador. Genera pulsos periódicos (ticks) que impulsan todo el sistema. A diferencia de enfoques alternativos que podrían usar señales o timers del SO, el Clock implementa un bucle activo que:
-
-1. Espera el tiempo configurado (`clock_speed_ms`)
-2. Incrementa el contador global de ticks
-3. Llama a `machine_advance_cycle()` para avanzar el estado
-4. Detecta eventos que requieren scheduling
-5. Notifica a otros componentes (Timer)
-
-### Implementación
-
-```c
-void* clock_thread_func(void* arg)
-{
-    Clock* clock = (Clock*)arg;
-    
-    while (1) {
-        pthread_mutex_lock(&clock->mutex);
-        if (clock->shutdown_requested) {
-            pthread_mutex_unlock(&clock->mutex);
-            break;
-        }
-        
-        clock->current_tick++;
-        uint32_t tick = clock->current_tick;
-        pthread_mutex_unlock(&clock->mutex);
-        
-        // Avanzar la máquina (ejecutar procesos)
-        machine_advance_cycle(clock->kernel->machine, clock->kernel);
-        
-        // Notificar al timer
-        timer_tick(clock->kernel->timer);
-        
-        // Verificar si alcanzamos la duración
-        if (clock->kernel->config.simulation_duration > 0 && 
-            tick >= clock->kernel->config.simulation_duration) {
-            kernel_shutdown(clock->kernel);
-            break;
-        }
-        
-        usleep(clock->clock_speed_ms * 1000);
-    }
-    
-    return NULL;
-}
-```
-
-### Decisiones de Diseño
-
-**¿Por qué un bucle activo en lugar de señales?**
-
-- **Simplicidad**: Más fácil de depurar y razonar sobre el comportamiento
-- **Precisión**: Control exacto sobre la velocidad de simulación
-- **Portabilidad**: No depende de características específicas del SO
-- **Determinismo**: Comportamiento predecible y reproducible
-
-**¿Por qué `usleep()` en lugar de condiciones?**
-
-- La simulación necesita avanzar a velocidad configurable
-- No hay eventos externos que esperar en el Clock
-- Permite ajustar la velocidad sin recompilar (`-s` flag)
+El Clock actúa como corazón del simulador, generando pulsos periódicos (ticks) que impulsan todo el sistema. Su implementación utiliza un bucle activo que espera el tiempo configurado, incrementa el contador global de ticks, llama a `machine_advance_cycle()`, detecta eventos para scheduling y notifica al Timer. Esta aproximación se eligió por su simplicidad de debugging, precisión en el control de velocidad, portabilidad entre sistemas operativos y comportamiento determinístico. El uso de `usleep()` permite configurar la velocidad de simulación mediante el flag `-s` sin necesidad de recompilar.
 
 ## Timer: Generador de Interrupciones
 
@@ -280,17 +215,16 @@ void process_queue_enqueue(ProcessQueue* queue, PCB* pcb)
 
 La Machine representa la arquitectura física del sistema con una jerarquía de tres niveles:
 
-```
-Machine
-├── CPU 0
-│   ├── Core 0
-│   │   ├── HW Thread 0 (MMU, registros, PCB*)
-│   │   └── HW Thread 1
-│   └── Core 1
-│       ├── HW Thread 0
-│       └── HW Thread 1
-└── CPU 1
-    └── ...
+```mermaid
+graph TD
+    M[Machine] --> CPU0[CPU 0]
+    M --> CPU1[CPU 1]
+    CPU0 --> C0[Core 0]
+    CPU0 --> C1[Core 1]
+    C0 --> HWT0["HW Thread 0 (MMU, registros, PCB*)"]
+    C0 --> HWT1[HW Thread 1]
+    C1 --> HWT2[HW Thread 0]
+    C1 --> HWT3[HW Thread 1]
 ```
 
 ### Estructura de Datos

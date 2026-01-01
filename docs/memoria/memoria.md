@@ -12,6 +12,8 @@ numbersections: true
 header-includes: |
   \usepackage{fancyhdr}
   \pagestyle{fancy}
+  \fancyhead[L]{churrOS}
+  \fancyhead[R]{\thepage}
   \usepackage{graphicx}
   \usepackage{listings}
   \usepackage{xcolor}
@@ -34,24 +36,13 @@ header-includes: |
 
 ## Características Principales
 
-- **Arquitectura event-driven**: El scheduler se activa únicamente ante eventos específicos (quantum expirado, proceso terminado, nuevo proceso)
-- **Tres algoritmos de scheduling implementados**:
-  - Round Robin (quantum fijo)
-  - FIFO (sin preemption)
-  - **Chocolate Caliente** (quantum adaptativo basado en temperatura - innovación propia)
-- **Arquitectura hardware configurable**: CPUs, cores y HW threads personalizables
-- **Gestión de memoria virtual completa**: MMU, TLB, paginación de 4KB
-- **Suite de 19 tests automatizados** con validación de comportamiento
-- **Sistema de logging multi-nivel** con soporte de colores y ubicación
+El proyecto implementa un scheduler event-driven que se activa únicamente ante eventos específicos como quantum expirado, proceso terminado o creación de nuevo proceso. Se han desarrollado tres algoritmos de scheduling completos: Round Robin con quantum fijo, FIFO sin preemption, y como innovación principal, Chocolate Caliente que implementa quantum adaptativo basado en temperatura del proceso.
+
+La arquitectura hardware es completamente configurable permitiendo especificar CPUs, cores y HW threads según las necesidades de experimentación. El sistema de memoria virtual incluye MMU con TLB, paginación de 4KB y traducción completa de direcciones virtuales a físicas. La validación del sistema se realiza mediante una suite de 30 tests automatizados que verifican todos los componentes. El sistema de logging multinivel con soporte de colores facilita el debugging y comprensión del comportamiento.
 
 ## Motivación
 
-El objetivo del proyecto es comprender en profundidad el funcionamiento interno de un kernel de sistema operativo mediante la implementación práctica de sus componentes esenciales. A diferencia de un enfoque puramente teórico, churrOS permite observar y experimentar con:
-
-1. **Sincronización multihilo real** usando primitivas POSIX
-2. **Algoritmos de scheduling** en acción con métricas medibles
-3. **Gestión de memoria virtual** con traducción de direcciones
-4. **Arquitectura modular** que refleja la separación de responsabilidades en un SO real
+El objetivo del proyecto es comprender en profundidad el funcionamiento interno de un kernel de sistema operativo mediante implementación práctica. A diferencia de un enfoque puramente teórico, churrOS permite experimentar directamente con sincronización multihilo usando primitivas POSIX, observar algoritmos de scheduling en acción con métricas medibles, implementar gestión de memoria virtual con traducción de direcciones, y comprender cómo la arquitectura modular refleja la separación de responsabilidades en sistemas operativos reales
 
 ## Organización del Documento
 

@@ -31,7 +31,7 @@ El proyecto churrOS ha cumplido exitosamente todos los objetivos planteados, imp
   - Quantum adaptativo (1-10 ticks según temperatura)
   - quantum_base configurable para ajuste de escala
   - Visualización intuitiva con emojis (❄️🟢🟡🔴🔥)
-- **Suite de 19 tests automatizados** con validación de comportamiento
+- **Suite de 30 tests automatizados** con validación de comportamiento
 - **Sistema de logging multi-nivel** con colores y ubicación
 
 ### Parte 3: Memoria Virtual ✅

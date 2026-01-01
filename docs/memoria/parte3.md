@@ -13,91 +13,34 @@ La tercera parte del proyecto implementa un sistema completo de gestión de memo
 
 ## Arquitectura de Memoria
 
-### Diseño del Espacio de Direcciones
+El sistema utiliza un bus de direcciones de 24 bits (2^24 = 16MB total) dividido en dos regiones principales: Kernel Space (0x000000-0x0FFFFF, 1MB) que aloja tablas de páginas y estructuras del kernel, y User Space (0x100000-0xFFFFFF, 15MB) que contiene código, datos y stack de procesos.
 
-El sistema utiliza un bus de direcciones de 24 bits:
-
-```
-┌─────────────────────────────────────────────────┐
-│ Address Space: 2^24 = 16MB                      │
-├─────────────────────────────────────────────────┤
-│ 0x000000 - 0x0FFFFF: Kernel Space (1MB)         │
-│   - Page Tables                                 │
-│   - Kernel Data Structures                      │
-├─────────────────────────────────────────────────┤
-│ 0x100000 - 0xFFFFFF: User Space (15MB)          │
-│   - Process Code (.text)                        │
-│   - Process Data (.data)                        │
-│   - Process Stack                               │
-└─────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    AS["Address Space: 16MB (2^24)"] --> KS["Kernel Space: 1MB"]
+    AS --> US["User Space: 15MB"]
+    KS --> PT["Page Tables"]
+    KS --> KD["Kernel Data Structures"]
+    US --> TC[".text - Code"]
+    US --> TD[".data - Data"]
+    US --> ST["Stack"]
 ```
 
 ### Configuración de Paginación
 
-```c
-#define ADDR_BUS_BITS       24      // 24-bit address bus
-#define ADDR_SPACE_SIZE     (1 << ADDR_BUS_BITS)  // 16MB
-#define WORD_SIZE           4       // 4 bytes per word
-#define PAGE_SIZE           4096    // 4KB pages
-#define PAGE_BITS           12      // log2(PAGE_SIZE)
-#define NUM_PAGES           4096    // Total pages in system
-
-#define KERNEL_RESERVED_PAGES  256  // 1MB for kernel
-```
+El sistema utiliza bus de 24 bits (16MB total), palabras de 4 bytes, páginas de 4KB (12 bits de offset), totalizando 4096 páginas con 256 reservadas para kernel (1MB).
 
 ### Descomposición de Dirección Virtual
 
-Una dirección virtual de 24 bits se descompone en:
-
-```
-┌─────────────┬─────────────┐
-│  VPN (12b)  │  Offset (12b) │
-├─────────────┼─────────────┤
-│ Bits 23-12  │  Bits 11-0   │
-└─────────────┴─────────────┘
-
-VPN: Virtual Page Number (4096 páginas posibles)
-Offset: Byte dentro de la página (4096 bytes)
-```
-
-Macros de manipulación:
-
-```c
-#define VPN_MASK            0xFFF000
-#define OFFSET_MASK         0x000FFF
-#define GET_VPN(addr)       (((addr) & VPN_MASK) >> PAGE_BITS)
-#define GET_OFFSET(addr)    ((addr) & OFFSET_MASK)
-#define MAKE_ADDR(vpn, offset) (((vpn) << PAGE_BITS) | (offset))
-```
+Cada dirección virtual de 24 bits se divide en VPN (Virtual Page Number, bits 23-12) y Offset (bits 11-0), permitiendo direccionar 4096 páginas de 4096 bytes cada una.
 
 ## Estructuras de Datos
 
 ### Page Table Entry
 
-```c
-typedef struct {
-    uint32_t valid    : 1;   // Página válida
-    uint32_t present  : 1;   // Presente en memoria física
-    uint32_t dirty    : 1;   // Modificada
-    uint32_t accessed : 1;   // Accedida recientemente
-    uint32_t pfn      : 20;  // Physical Frame Number
-    uint32_t reserved : 8;   // Reservado
-} PageTableEntry;
-```
-
-**Campos:**
-- `valid`: Indica si la entrada es válida (página asignada al proceso)
-- `present`: Indica si la página está en memoria física (para futuro swapping)
-- `dirty`: Indica si la página ha sido modificada (para write-back)
-- `accessed`: Indica si la página ha sido accedida (para algoritmos de reemplazo)
-- `pfn`: Physical Frame Number (20 bits permiten 2^20 frames = 4GB de RAM direccionable)
+Cada entrada de tabla de páginas (32 bits) contiene flags de valid (página asignada), present (en memoria física), dirty (modificada), accessed (usada recientemente) y el Physical Frame Number (PFN) de 20 bits que permite direccionar hasta 4GB de RAM.
 
 ### Page Table
-
-```c
-typedef struct {
-    PageTableEntry entries[NUM_PAGES];  // 4096 entradas
-    uint32_t physical_address;          // Dirección física de la tabla
 } PageTable;
 ```
 

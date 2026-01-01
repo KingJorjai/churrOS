@@ -12,37 +12,22 @@ Se han implementado tres algoritmos de scheduling:
 
 ## Arquitectura del Scheduler
 
-### Diseño Event-Driven
+El scheduler de churrOS implementa un diseño completamente event-driven que solo se activa cuando ocurren eventos específicos: proceso termina (TTL == 0 o EXIT ejecutado), quantum expira (solo en RR y CH), o se crea un nuevo proceso. Este enfoque refleja el comportamiento de kernels reales donde el scheduler es invocado por interrupciones específicas.
 
-El scheduler de churrOS **no** se ejecuta periódicamente. En su lugar, se activa únicamente cuando ocurren estos eventos:
-
-1. **Proceso termina** (TTL == 0 o EXIT ejecutado)
-2. **Quantum expira** (solo en RR y CH)
-3. **Nuevo proceso creado** (señalizado por Process Generator)
-
-Este diseño refleja el comportamiento de kernels reales donde el scheduler es invocado por interrupciones específicas.
-
-### Flujo de Ejecución
-
+```mermaid
+flowchart TD
+    CT[Clock Tick] --> MAC[machine_advance_cycle]
+    MAC --> LOOP{Para cada HW Thread}
+    LOOP --> EXEC[Ejecutar instrucción]
+    EXEC --> DEC[Decrementar TTL]
+    DEC --> INC[Incrementar ticks_since_swap]
+    INC --> TEMP[Actualizar temperatura]
+    TEMP --> EVENT{Detectar eventos}
+    EVENT -->|TTL == 0?| SCHED[scheduler_update_thread]
+    EVENT -->|Quantum expirado?| SCHED
+    EVENT -->|No| LOOP
+    SCHED --> LOOP
 ```
-┌─────────────────────────────────────────────────┐
-│ Clock Tick                                       │
-│   ↓                                              │
-│ machine_advance_cycle()                          │
-│   ↓                                              │
-│ Para cada HW Thread:                             │
-│   1. Ejecutar instrucción (si hay programa)      │
-│   2. Decrementar TTL                             │
-│   3. Incrementar ticks_since_swap                │
-│   4. Actualizar temperatura (CH)                 │
-│   5. Detectar eventos:                           │
-│      - TTL == 0?                                 │
-│      - Quantum expirado?                         │
-│   6. Si hay evento → scheduler_update_thread()   │
-└─────────────────────────────────────────────────┘
-```
-
-### Interfaz del Scheduler
 
 ```c
 /**
@@ -58,95 +43,15 @@ Esta función es llamada directamente desde `machine_advance_cycle()` cuando se 
 
 ## Round Robin (RR)
 
-### Descripción
+Round Robin es el algoritmo clásico de scheduling con quantum fijo (configurado por `-q`, default 5 ticks) y preemption obligatoria. El proceso es desalojado al expirar su quantum, garantizando equidad entre todos los procesos aunque con overhead de un context switch por quantum. Su implementación detecta quantum expirado en `machine_advance_cycle()` y llama a `scheduler_update_thread()`, donde procesos terminados son destruidos, procesos con quantum expirado vuelven a READY y se encolan, y se despacha el siguiente proceso o se crea IDLE si la cola está vacía.
 
-Round Robin es el algoritmo clásico de scheduling con las siguientes características:
+### Características Clave
 
-- **Quantum fijo**: Configurado por el parámetro `-q` (default: 5 ticks)
-- **Preemption**: El proceso es desalojado al expirar el quantum
-- **Equidad**: Todos los procesos reciben el mismo tiempo de CPU
-- **Overhead**: Un context switch cada quantum
-
-### Implementación
-
-```c
-// En machine_advance_cycle()
-if (kernel->config.scheduler_algorithm == SCHEDULER_ROUND_ROBIN) {
-    if (pcb->ticks_since_swap >= kernel->config.rr_quantum) {
-        scheduler_update_thread(kernel, thread, cpu, core, t);
-    }
-}
-
-// En scheduler_update_thread()
-case SCHEDULER_ROUND_ROBIN:
-    if (current->ttl == 0 || 
-        current->state == PROCESS_STATE_TERMINATED) {
-        // Proceso terminó
-        pcb_destroy(current);
-        thread->current_pcb = NULL;
-    } else if (current->ticks_since_swap >= 
-               kernel->config.rr_quantum) {
-        // Quantum expirado → preemption
-        current->state = PROCESS_STATE_READY;
-        process_queue_enqueue(kernel->process_queue, current);
-    }
-    
-    // Despachar siguiente proceso
-    if (!thread->current_pcb) {
-        PCB* next = process_queue_dequeue(kernel->process_queue);
-        if (next) {
-            scheduler_dispatch(thread, next, cpu, core, hw_thread);
-            kernel->context_switches++;
-        } else {
-            // Crear proceso IDLE
-            thread->current_pcb = pcb_create_idle();
-        }
-    }
-    break;
-```
-
-### Características
-
-**Ventajas:**
-- Simple de implementar y entender
-- Buen tiempo de respuesta para procesos interactivos
-- Equidad garantizada entre procesos
-
-**Desventajas:**
-- Overhead de context switches frecuentes
-- Quantum pequeño → más overhead
-- Quantum grande → peor tiempo de respuesta
-
-### Testing
-
-```bash
-# Test básico de Round Robin
-./build/churros -a rr -c 1 -o 1 -t 1 -q 5 -g 10 -s 100 -d 100
-
-# Test con quantum corto (más preemption)
-./build/churros -a rr -q 2 -g 5 -s 50 -d 50
-
-# Test multicore
-./build/churros -a rr -c 2 -o 2 -t 2 -q 5 -g 8 -d 150
-```
-
-Validaciones realizadas:
-- ✅ Preemption ocurre exactamente al expirar quantum
-- ✅ Procesos rotan equitativamente
-- ✅ Context switches contabilizados correctamente
+Round Robin destaca por su simplicidad conceptual y buen tiempo de respuesta para procesos interactivos, garantizando equidad entre procesos. Sin embargo, sufre overhead de context switches frecuentes, donde quantums pequeños incrementan el overhead mientras quantums grandes deterioran el tiempo de respuesta. Los tests validan que la preemption ocurre exactamente al expirar el quantum, los procesos rotan equitativamente y los context switches se contabilizan correctamente.
 
 ## FIFO (First In First Out)
 
-### Descripción
-
-FIFO es el algoritmo más simple posible:
-
-- **Sin preemption por tiempo**: Los procesos ejecutan hasta terminar
-- **Sin quantum**: El parámetro `-q` no tiene efecto
-- **Orden FIFO**: El primer proceso en llegar es el primero en ejecutar
-- **Mínimo overhead**: Solo hay context switch cuando un proceso termina
-
-### Implementación
+FIFO representa el algoritmo más simple posible, ejecutando procesos sin preemption por tiempo hasta su terminación. El parámetro `-q` no tiene efecto, y solo ocurre context switch cuando un proceso termina, minimizando completamente el overhead. Su orden estricto FIFO hace que el primer proceso en llegar sea el primero en ejecutar.
 
 ```c
 case SCHEDULER_FIFO:
@@ -510,9 +415,9 @@ Componentes disponibles:
 
 ## Testing Automatizado
 
-### Suite de 19 Tests
+### Suite de 30 Tests
 
-El script `run_tests.sh` ejecuta 19 tests organizados en 5 secciones:
+El script `run_tests.sh` ejecuta 30 tests organizados en 6 secciones:
 
 1. **Round Robin** (3 tests): Preemption, quantum corto, multicore
 2. **FIFO** (3 tests): Sin preemption, generación rápida, multicore
@@ -551,7 +456,7 @@ La implementación del scheduler demuestra:
 ✅ **Arquitectura event-driven funcional**: El scheduler solo se activa por eventos  
 ✅ **Tres algoritmos completos**: RR, FIFO y CH totalmente funcionales  
 ✅ **Quantum adaptativo innovador**: Chocolate Caliente es una contribución original  
-✅ **Testing exhaustivo**: 19 tests automatizados validan comportamiento  
+✅ **Testing exhaustivo**: 30 tests automatizados validan comportamiento  
 ✅ **Logging sofisticado**: Sistema multi-nivel con colores y ubicación  
 ✅ **Comparativas empíricas**: Datos reales de fairness, overhead y convoy effect  
 
