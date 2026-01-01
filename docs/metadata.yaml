@@ -1,5 +1,5 @@
 ---
-title: "churrOS - Simulador de Kernel con Scheduling Adaptativo"
+title: "churrOS - Simulador de un Kernel"
 subtitle: "Práctica de Sistemas Operativos"
 author: "Jorge Arévalo Fernández"
 date: "Enero 2025"
@@ -17,6 +17,6 @@ toc-depth: 2
 header-includes: |
   \usepackage{fancyhdr}
   \pagestyle{fancy}
-  \fancyhead[L]{churrOS}
+  \fancyhead[L]{churrOS - Simulador de un Kernel}
   \fancyhead[R]{\thepage}
 ---

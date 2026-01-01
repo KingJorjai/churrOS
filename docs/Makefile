@@ -10,11 +10,11 @@ SECTIONS_DIR = sections
 METADATA = metadata.yaml
 
 # Archivos fuente en orden
-SOURCES = $(SECTIONS_DIR)/01-resumen.md \
-          $(SECTIONS_DIR)/02-arquitectura-base.md \
-          $(SECTIONS_DIR)/03-scheduler.md \
-          $(SECTIONS_DIR)/04-memoria-virtual.md \
-          $(SECTIONS_DIR)/05-conclusiones.md
+SOURCES = $(SECTIONS_DIR)/00-introduccion.md \
+          $(SECTIONS_DIR)/01-parte1-base.md \
+          $(SECTIONS_DIR)/02-parte2-scheduler.md \
+          $(SECTIONS_DIR)/03-parte3-memoria.md \
+          $(SECTIONS_DIR)/04-conclusiones.md
 
 # Archivos de salida
 OUTPUT = memoria.pdf
