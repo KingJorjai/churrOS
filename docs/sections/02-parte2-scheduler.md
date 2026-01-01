@@ -142,7 +142,7 @@ Si la cola está vacía al expirar el quantum, el proceso continúa ejecutando. 
 - Dilema del quantum: valores pequeños mejoran respuesta pero aumentan overhead; valores grandes reducen overhead pero deterioran interactividad
 - No considera prioridades ni tipo de proceso (I/O-bound vs CPU-bound)
 
-**Resultados:** Quantum=4 ticks produce preemption exacta cada 4 ticks, los procesos rotan estrictamente en orden FIFO, y los context switches se contabilizan correctamente.
+**Resultados:** El quantum configurado (5 ticks por defecto) produce preemption exacta cuando expira, los procesos rotan estrictamente en orden FIFO, y los context switches se contabilizan correctamente.
 
 ## FIFO (First In First Out)
 
@@ -209,10 +209,10 @@ flowchart TD
     MuyCaliente["Muy Caliente: 60-79\nQuantum = 2 ticks"]
     Ardiendo["Ardiendo: temp >= 80\nQuantum = 1 tick"]
     
-    Frio -->|+1C por tick| Templado
-    Templado -->|+1C por tick| Caliente
-    Caliente -->|+1C por tick| MuyCaliente
-    MuyCaliente -->|+1C por tick| Ardiendo
+    Frio -->|+8C por tick| Templado
+    Templado -->|+8C por tick| Caliente
+    Caliente -->|+8C por tick| MuyCaliente
+    MuyCaliente -->|+8C por tick| Ardiendo
     
     Frio -->|Preemption -5C| Cola
     Templado -->|Preemption -5C| Cola
@@ -250,22 +250,24 @@ Con `quantum_base=5` (por defecto):
 | $60-79°C$   | 2 ticks  | 40%   | Muy caliente |
 | $\geq 80°C$ | 1 tick   | 20%   | Ardiendo |
 
-**Ejemplo de evolución:**
+**Ejemplo de evolución**
 
 ```plaintext
-Tick  Temp   Quantum  Acción
---------------------------------------------
-0     0°C    10       Proceso despachado (frío)
-1     8°C    10       Ejecutando...
-2     16°C   10       Ejecutando...
-10    80°C   1        Quantum agotado → Preemption
-      75°C   2        Enfriado en cola (-5°C)
-11    83°C   1        Re-despachado
-12    91°C   1        Quantum agotado (ardiendo)
-      86°C   1        Enfriado en cola
-13    94°C   1        Re-despachado
-14    100°C  1        Límite máximo alcanzado
+Tick  3  SCH (0:0:0)  Dispatch PID=1 (Reemplazando IDLE) TTL=0
+Tick  6  SCH (0:0:0)  PID=1 Temp=24°C Quantum=6 Ticks=3/6 TTL=0
+Tick  8  SCH (0:0:0)  PID=1 Temp=40°C Quantum=4 Ticks=5/4 TTL=0
+Tick  8  SCH (0:0:0)  Context switch PID=1 (enfriándose) -> PID=2 (quantum=10)
+Tick  9  SCH (0:0:0)  PID=2 Temp=8°C Quantum=10 Ticks=1/10 TTL=0
+Tick 12  SCH (0:0:0)  PID=2 Temp=32°C Quantum=6 Ticks=4/6 TTL=0
+Tick 13  SCH (0:0:0)  PID=2 Temp=40°C Quantum=4 Ticks=5/4 TTL=0
+Tick 13  SCH (0:0:0)  Context switch PID=2 (enfriándose) -> PID=1 (quantum=6)
+Tick 15  SCH (0:0:0)  PID=1 Temp=51°C Quantum=4 Ticks=2/4 TTL=0
+Tick 17  SCH (0:0:0)  PID=1 Temp=67°C Quantum=2 Ticks=4/2 TTL=0
+Tick 17  SCH (0:0:0)  Context switch PID=1 (enfriándose) -> PID=3 (quantum=10)
+Tick 18  SCH (0:0:0)  PID=3 Temp=8°C Quantum=10 Ticks=1/10 TTL=0
 ```
+
+Se observa claramente: PID=1 arranca a 0°C con quantum=10, ejecuta 3 ticks y sube a 24°C (quantum→6), otros 2 ticks más llega a 40°C (quantum→4) y hace preemption. Al volver después del context switch, tiene 35°C (-5°C enfriamiento) con quantum=6, vuelve a ejecutar y sube a 51°C, luego 67°C con quantum=2.
 
 La función `get_max_quantum_by_temperature()` implementa la tabla:
 

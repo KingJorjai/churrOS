@@ -21,7 +21,7 @@ He desarrollado el proyecto en tres fases, cada una más compleja que la anterio
 
 **Parte 2 - Scheduler**: Aquí viene lo interesante: he implementado un planificador event-driven que solo se activa cuando pasa algo relevante (se acaba el quantum, termina un proceso o llega uno nuevo). He desarrollado tres algoritmos: Round Robin clásico, FIFO sin preemption y uno propio que he llamado Chocolate Caliente, con quantum adaptativo según la "temperatura" del proceso.
 
-**Parte 3 - Memoria Virtual**: La guinda del pastel. He implementado MMU, TLB, paginación de 4KB y traducción completa de direcciones. También he creado un loader de ELF y un set básico de instrucciones para validar que todo funcionaba bien.
+**Parte 3 - Memoria Virtual**: La guinda del pastel. He implementado MMU, TLB, paginación de 4KB y traducción completa de direcciones. También he creado un loader de programas en formato texto plano y un set básico de instrucciones para validar que todo funcionaba bien.
 
 ## Estructura del Documento
 

@@ -504,7 +504,7 @@ flowchart TD
 
 **Fetch:** Se lee el PC (Program Counter) de la MMU, que contiene la dirección virtual de la próxima instrucción. Se traduce con `mmu_translate()` obteniendo la dirección física (posible TLB hit/miss y page fault). Se lee la palabra de memoria física con `physical_memory_read_word()` y se guarda en el IR (Instruction Register) de la MMU.
 
-**Decode:** Se extrae el opcode usando `GET_OPCODE(instr)` que aplica máscara y shift: `(instr >> 24) & 0xFF`. Según el opcode, se extraen los demás campos: registro destino `GET_RD()`, dirección `GET_ADDR()`, o registros fuente `GET_RS1()/GET_RS2()`. Estos macros encapsulan el bit-twiddling necesario.
+**Decode:** Se extrae el opcode usando `GET_OPCODE(instr)` que aplica máscara y shift: `(instr >> 28) & 0xF`. Según el opcode, se extraen los demás campos: registro destino `GET_RD()`, dirección `GET_ADDR()`, o registros fuente `GET_RS1()/GET_RS2()`. Estos macros encapsulan el bit-twiddling necesario.
 
 **Execute:** Se ejecuta la operación correspondiente. LOAD traduce la dirección operando (segunda traducción), lee memoria y guarda en registro. STORE traduce dirección, lee registro y escribe memoria. ADD suma inmediato a registro. EXIT setea el estado del proceso a TERMINATED y retorna 0, deteniendo la ejecución.
 

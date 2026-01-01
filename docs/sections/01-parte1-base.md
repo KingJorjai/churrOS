@@ -118,7 +118,7 @@ stateDiagram-v2
     
     READY --> RUNNING: dispatch (v2+)
     RUNNING --> READY: preemption (v2+)
-    RUNNING --> TERMINATED: TTL=0 o EXIT (v2+)
+    RUNNING --> TERMINATED: TTL=0 (v2+), EXIT (v3)
     
     TERMINATED --> [*]: pcb_destroy()
     
@@ -142,7 +142,7 @@ PCB* pcb_create(uint32_t pid);
 void pcb_destroy(PCB* pcb);
 ```
 
-En v1, `pcb_create()` toma solo el PID y genera internamente un TTL aleatorio entre 1 y 100 ticks. La función `pcb_create_idle()` se añade en la Parte 2 para crear procesos IDLE (PID=0) cuando no hay trabajo disponible.
+La función `pcb_create()` toma el PID y genera internamente un TTL aleatorio entre 1 y 100 ticks. La función `pcb_create_idle()` crea procesos IDLE (PID=0, TTL=0 que se trata como especial sin decrementar) que se usan cuando no hay trabajo disponible.
 
 ### Process Queue
 
@@ -251,7 +251,7 @@ La función `machine_advance_cycle()` es el corazón del simulador, invocada en 
 
 Durante el recorrido, detecta dos eventos críticos:
 
-1. **Terminación**: Procesos con TTL=0 o que ejecutaron EXIT
+1. **Terminación**: Procesos con TTL=0 (o que ejecutaron EXIT en v3)
 2. **Quantum expirado**: Procesos que alcanzaron su quantum (solo RR y Chocolate Caliente)
 
 Al detectar eventos, setea flags booleanas (`process_terminated_detected`, `quantum_expired_detected`). Al final del ciclo, si alguna flag está activa, señaliza al scheduler con `kernel_signal_scheduler()`.
@@ -260,7 +260,7 @@ Al detectar eventos, setea flags booleanas (`process_terminated_detected`, `quan
 
 ## Resultados de Pruebas
 
-Los tests validan el funcionamiento completo de la infraestructura base. El Clock genera ticks consistentemente a 10ms de intervalo, los Timers interrumpen exactamente según su periodo configurado, y el Process Generator crea PIDs secuenciales con TTLs aleatorios entre 10-100 ticks. La ProcessQueue funciona correctamente sin race conditions bajo alta concurrencia (múltiples productores/consumidores). Toda la sincronización multihilo (mutex + condvar) opera sin deadlocks ni condiciones de carrera.
+Los tests validan el funcionamiento completo de la infraestructura base. El Clock genera ticks consistentemente según el intervalo configurado (100ms por defecto), los Timers interrumpen exactamente según su periodo configurado, y el Process Generator crea PIDs secuenciales con TTLs aleatorios entre 1-100 ticks. La ProcessQueue funciona correctamente sin race conditions bajo alta concurrencia (múltiples productores/consumidores). Toda la sincronización multihilo (mutex + condvar) opera sin deadlocks ni condiciones de carrera.
 
 ## Limitaciones de la Parte 1
 
@@ -276,7 +276,7 @@ Usamos dos timers independientes (uno para el scheduler, otro para el generador 
 
 ### Procesos IDLE
 
-La lógica de procesos IDLE (PID=0) se añade en la Parte 2. En v1, los hardware threads simplemente no tienen procesos asignados inicialmente. Los IDLE llegan junto con el scheduling completo.
+Cada hardware thread se inicializa con un proceso IDLE (PID=0, TTL=0). Los procesos IDLE actúan como placeholder cuando no hay procesos reales disponibles para ejecutar, evitando que los threads queden sin trabajo asignado. El TTL=0 se trata de forma especial: no se decrementa, permitiendo que el IDLE permanezca indefinidamente.
 
 ### Sincronización Mutex + Condvar
 
