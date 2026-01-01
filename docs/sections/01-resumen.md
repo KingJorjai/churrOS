@@ -6,7 +6,7 @@
 
 El proyecto implementa un scheduler que se activa únicamente ante eventos específicos como quantum expirado, proceso terminado o creación de nuevo proceso. Se han desarrollado tres algoritmos de scheduling completos: Round Robin con quantum fijo, FIFO sin preemption y como innovación principal, Chocolate Caliente que implementa quantum adaptativo basado en temperatura del proceso.
 
-La arquitectura hardware es completamente configurable permitiendo especificar CPUs, cores y HW threads según las necesidades de experimentación. El sistema de memoria virtual incluye MMU con TLB, paginación de 4KB y traducción completa de direcciones virtuales a físicas. La validación del sistema se realiza mediante una suite de 30 tests automatizados que verifican todos los componentes. El sistema de logging multinivel con soporte de colores facilita el debugging y comprensión del comportamiento.
+La arquitectura hardware es completamente configurable permitiendo especificar CPUs, cores y HW threads según las necesidades de experimentación. El sistema de memoria virtual incluye MMU con TLB, paginación de 4KB y traducción completa de direcciones virtuales a físicas. La validación del sistema se realiza mediante una batería de 34 pruebas automatizadas que verifican todos los componentes. El sistema de logging multinivel con soporte de colores facilita la depuración y la comprensión del comportamiento.
 
 ## Motivación
 
@@ -20,6 +20,6 @@ Este documento está organizado siguiendo las tres partes principales del proyec
 - **Parte 2**: Scheduler y algoritmos de scheduling
 - **Parte 3**: Gestión de memoria virtual (MMU, TLB, loader)
 
-Cada sección incluye diseño, implementación, decisiones técnicas y resultados de testing.
+Cada sección incluye diseño, implementación, decisiones técnicas y resultados de pruebas.
 
 \newpage

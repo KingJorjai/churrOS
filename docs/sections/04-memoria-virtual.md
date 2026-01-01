@@ -41,11 +41,12 @@ Cada dirección virtual de 24 bits se divide en VPN (Virtual Page Number, bits 2
 Cada entrada de tabla de páginas (32 bits) contiene flags de valid (página asignada), present (en memoria física), dirty (modificada), accessed (usada recientemente) y el Physical Frame Number (PFN) de 20 bits que permite direccionar hasta 4GB de RAM.
 
 ### Page Table
+```plaintext
 } PageTable;
 ```
 
 Cada proceso tiene su propia tabla de páginas. El tamaño de una tabla es:
-```
+```plaintext
 4096 entradas × 4 bytes/entrada = 16KB por tabla
 ```
 
@@ -178,6 +179,42 @@ uint32_t mmu_translate(MMU* mmu, PhysicalMemory* pm,
 }
 ```
 
+### Ejemplo real (v3) — Loader, MMU y ejecución
+
+```plaintext
+Parsed elfs/prog000.elf: .text at 0x000000 (36 bytes), .data at 0x000024 (16 bytes)
+Loading .text segment (9 words)
+Loading .data segment (4 words)
+Program disassembly:
+    0x000000: [01000028] ld r1, 0x000028
+    0x000004: [0200002C] ld r2, 0x00002C
+    0x000008: [23120000] add r3, r1, r2
+    0x00000C: [13000030] st r3, 0x000030
+    0x000020: [F0000000] exit
+
+Data segment before execution:
+Memory dump 0x100024 - 0x100034:
+    0x100024: 00000015 FFFFFFC4 FFFFFFBF FFFFFFC7
+
+MMU TLB flush: invalidating all 16 entries
+(0:0:0) Dispatch PID=1 (Reemplazando IDLE) TTL=0
+MMU TLB MISS: VPN=0 (vaddr=0x000000) - walking page table at PTBR=0x000000
+MMU TLB UPDATE: Adding VPN=0 -> PFN=256 to TLB[0]
+MMU TLB HIT: VPN=0 -> PFN=256 (vaddr=0x000028 -> paddr=0x100028) [READ]
+EXE LD r1, 0x000028 -> r1 = -60 (0xFFFFFFC4)
+MMU TLB HIT: VPN=0 -> PFN=256 (vaddr=0x000008 -> paddr=0x100008) [READ]
+EXE ADD r3, r1, r2 -> r3 = -60 + -65 = -125
+MMU TLB HIT: VPN=0 -> PFN=256 (vaddr=0x000030 -> paddr=0x100030) [WRITE]
+EXE ST r3, 0x000030 <- -125 (0xFFFFFF83)
+MMU TLB HIT: VPN=0 -> PFN=256 (vaddr=0x000020 -> paddr=0x100020) [READ]
+MCH (0:0:0) PID=1 PC=0x000020 [F0000000]
+PID=1 executed EXIT instruction
+
+Data segment after execution:
+Memory dump 0x100024 - 0x100034:
+    0x100024: FFFFFF42 FFFFFFC4 FFFFFFBF FFFFFF83
+```
+
 ### Estadísticas de TLB
 
 El sistema recolecta métricas de rendimiento:
@@ -189,6 +226,13 @@ double tlb_hit_rate = (double)mmu->tlb.hits /
 ```
 
 Típicamente se observan hit rates de 80-95% dependiendo del patrón de acceso.
+
+Ejemplo v3 (hit rate por hilo):
+
+```plaintext
+CPU 0 Core 0 Thread 0:
+    TLB: 47 hits, 4 misses (92.2% hit rate)
+```
 
 ## Memory Layout del Proceso
 
@@ -209,7 +253,7 @@ typedef struct {
 ```
 
 **Ejemplo de layout:**
-```
+```plaintext
 Virtual Address Space del Proceso:
 0x000000 - 0x00FFFF: .text (code)     - 64KB
 0x010000 - 0x01FFFF: .data (data)     - 64KB
@@ -256,93 +300,99 @@ int memory_allocate_pages(PhysicalMemory* pm, MemoryLayout* layout,
 
 ### Formato de Instrucciones
 
-Cada instrucción ocupa 4 bytes (una palabra):
+Cada instrucción ocupa 4 bytes (32 bits) y sigue estos formatos reales:
 
+```plaintext
+LD:  ┌────────┬────────┬──────────────────────────────┐
+    │ Opcode │   Rd   │        Addr (24 bits)        │
+    │ (4b)   │  (4b)  │            (24b)             │
+    └────────┴────────┴──────────────────────────────┘
+
+ST:  ┌────────┬────────┬──────────────────────────────┐
+    │ Opcode │   Rs   │        Addr (24 bits)        │
+    │ (4b)   │  (4b)  │            (24b)             │
+    └────────┴────────┴──────────────────────────────┘
+
+ADD: ┌────────┬────────┬────────┬────────┬────────────┐
+    │ Opcode │   Rd   │   Rs1  │   Rs2  │   (16b)     │
+    │ (4b)   │  (4b)  │  (4b)  │  (4b)  │  sin uso    │
+    └────────┴────────┴────────┴────────┴────────────┘
+
+EXIT: Opcode 0xF (nibble alto = 1111) y resto ignorado.
 ```
-┌────────┬────────┬────────┬────────┐
-│ Opcode │   Rd   │   Rs   │   Imm  │
-│ (8b)   │  (8b)  │  (8b)  │  (8b)  │
-└────────┴────────┴────────┴────────┘
+
+Macros de decodificación usadas por el motor:
+
+```c
+#define GET_OPCODE(instr)    (((instr) & 0xF0000000) >> 28)
+#define GET_RD(instr)        (((instr) >> 24) & 0x0F)
+#define GET_RS1(instr)       (((instr) >> 20) & 0x0F)
+#define GET_RS2(instr)       (((instr) >> 16) & 0x0F)
+#define GET_ADDR(instr)      ((instr) & 0x00FFFFFF)
 ```
 
 ### Instrucciones Implementadas
 
-#### LD (Load) - Opcode 0x01
+#### LD (Load) - Opcode 0x0
 
-Carga un valor de memoria a registro:
+Carga una palabra desde dirección virtual a un registro:
 
-```c
-LD Rd, Rs, Imm
-// Rd = Memory[Rs + Imm]
-```
-
-**Ejemplo:**
-```
-LD R1, R0, 4   // R1 = Memory[R0 + 4]
+```plaintext
+ld rD, vaddr   // rD = Memory[vaddr]
 ```
 
 **Implementación:**
 ```c
-case OP_LD:
-    addr = mmu->registers[rs] + imm;
-    physical_addr = mmu_translate(mmu, pm, addr, 0);  // Read
-    if (physical_addr == UINT32_MAX) {
-        LOG_ERROR(LOG_COMPONENT_MEMORY, "LD page fault");
-        return -1;
-    }
-    mmu->registers[rd] = memory_read_word(pm, physical_addr);
+case OP_LD: {
+    uint32_t rd = GET_RD(instr);
+    uint32_t vaddr = GET_ADDR(instr);
+    uint32_t paddr = mmu_translate(mmu, pm, vaddr, 0);
+    if (paddr == 0xFFFFFFFF) { /* fallo de traducción */ return 0; }
+    mmu->registers[rd] = (int32_t)physical_memory_read_word(pm, paddr);
     break;
+}
 ```
 
-#### ST (Store) - Opcode 0x02
+#### ST (Store) - Opcode 0x1
 
-Almacena un valor de registro en memoria:
+Almacena una palabra desde registro a dirección virtual:
 
-```c
-ST Rs, Rd, Imm
-// Memory[Rd + Imm] = Rs
-```
-
-**Ejemplo:**
-```
-ST R1, R0, 8   // Memory[R0 + 8] = R1
+```plaintext
+st rS, vaddr   // Memory[vaddr] = rS
 ```
 
 **Implementación:**
 ```c
-case OP_ST:
-    addr = mmu->registers[rd] + imm;
-    physical_addr = mmu_translate(mmu, pm, addr, 1);  // Write
-    if (physical_addr == UINT32_MAX) {
-        LOG_ERROR(LOG_COMPONENT_MEMORY, "ST page fault");
-        return -1;
-    }
-    memory_write_word(pm, physical_addr, mmu->registers[rs]);
+case OP_ST: {
+    uint32_t rs = GET_RD(instr); /* campo RD se usa como fuente */
+    uint32_t vaddr = GET_ADDR(instr);
+    uint32_t paddr = mmu_translate(mmu, pm, vaddr, 1);
+    if (paddr == 0xFFFFFFFF) { /* fallo de traducción */ return 0; }
+    physical_memory_write_word(pm, paddr, (uint32_t)mmu->registers[rs]);
     break;
+}
 ```
 
-#### ADD - Opcode 0x03
+#### ADD - Opcode 0x2
 
 Suma dos registros:
 
-```c
-ADD Rd, Rs, Imm
-// Rd = Rs + Imm
-```
-
-**Ejemplo:**
-```
-ADD R2, R1, 5   // R2 = R1 + 5
+```plaintext
+add rD, rS1, rS2   // rD = rS1 + rS2
 ```
 
 **Implementación:**
 ```c
-case OP_ADD:
-    mmu->registers[rd] = mmu->registers[rs] + (int8_t)imm;
+case OP_ADD: {
+    uint32_t rd = GET_RD(instr);
+    uint32_t rs1 = GET_RS1(instr);
+    uint32_t rs2 = GET_RS2(instr);
+    mmu->registers[rd] = mmu->registers[rs1] + mmu->registers[rs2];
     break;
+}
 ```
 
-#### EXIT - Opcode 0xFF
+#### EXIT - Opcode 0xF
 
 Termina el proceso:
 
@@ -353,8 +403,7 @@ EXIT
 **Implementación:**
 ```c
 case OP_EXIT:
-    LOG_INFO(LOG_COMPONENT_MACHINE, "Process EXIT");
-    return 1;  // Señal de terminación
+    return 0;  // Señal de terminación
 ```
 
 ### Motor de Ejecución
@@ -401,90 +450,23 @@ int instruction_execute(MMU* mmu, PhysicalMemory* pm)
 
 ## Loader de Programas
 
-### Formato .elf
+### Formato de archivo
 
-Los archivos `.elf` contienen secciones de código y datos:
+Los archivos generados por Prometheus comienzan con dos cabeceras que indican las direcciones virtuales de inicio para `.text` y `.data`, seguidas por palabras hexadecimales. La instrucción `EXIT` (opcode 0xF en el nibble alto) marca el final de la sección `.text`; a continuación vienen los valores de `.data`.
 
-```
-.elf file format:
-┌──────────────────────────────────────┐
-│ [.text]                               │
-│ <size>                                │
-│ <instruction_1>                       │
-│ <instruction_2>                       │
-│ ...                                   │
-├──────────────────────────────────────┤
-│ [.data]                               │
-│ <size>                                │
-│ <data_1>                              │
-│ <data_2>                              │
-│ ...                                   │
-└──────────────────────────────────────┘
+```plaintext
+.text <hex_vaddr>
+.data <hex_vaddr>
+<hex_word>   ; instrucciones de .text (termina al encontrar EXIT)
+...
+<hex_word>   ; valores de .data
+...
 ```
 
 ### Proceso de Carga
 
 ```c
-int loader_load_program(const char* filename, PCB* pcb, 
-                       PhysicalMemory* pm)
-{
-    FILE* f = fopen(filename, "r");
-    if (!f) return -1;
-    
-    char line[256];
-    int in_text = 0, in_data = 0;
-    
-    // 1. Crear Page Table para el proceso
-    int pt_frame = physical_memory_allocate_frame(pm);
-    pcb->mm.pgb = pt_frame * PAGE_SIZE;
-    PageTable* pt = (PageTable*)(pm->data + pcb->mm.pgb);
-    memset(pt, 0, sizeof(PageTable));
-    
-    // 2. Definir layout
-    pcb->mm.code_start = 0x0;
-    pcb->mm.data_start = 0x10000;  // 64KB después
-    
-    uint32_t code_offset = 0;
-    uint32_t data_offset = 0;
-    
-    // 3. Parsear archivo
-    while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "[.text]")) {
-            in_text = 1; in_data = 0;
-            continue;
-        }
-        if (strstr(line, "[.data]")) {
-            in_text = 0; in_data = 1;
-            continue;
-        }
-        
-        if (in_text) {
-            // Parsear instrucción y escribir en memoria
-            uint32_t instruction = parse_instruction(line);
-            uint32_t vaddr = pcb->mm.code_start + code_offset;
-            
-            // Asignar página si es necesario
-            ensure_page_allocated(pm, pt, vaddr);
-            
-            // Escribir instrucción
-            uint32_t paddr = translate_address(pm, pt, vaddr);
-            memory_write_word(pm, paddr, instruction);
-            
-            code_offset += 4;
-        }
-        
-        if (in_data) {
-            // Similar para datos
-        }
-    }
-    
-    pcb->mm.code_size = code_offset;
-    pcb->mm.data_size = data_offset;
-    pcb->is_loaded = 1;
-    
-    fclose(f);
-    return 0;
-}
+El loader parsea las cabeceras `.text` y `.data`, recopila las palabras de código hasta `EXIT` y luego las de `.data`, crea la tabla de páginas del proceso, asigna frames por página y escribe código/datos en memoria física según las traducciones.
 ```
 
 ### Integración con Scheduler

@@ -224,15 +224,16 @@ void machine_advance_cycle(Machine* machine, Kernel* kernel)
                     pcb->temperature += 8;
                     if (pcb->temperature > 100)
                         pcb->temperature = 100;
-                    
-                    /* Calcular quantum adaptativo basado en temperatura */
+
+                    /* Calcular quantum adaptativo basado en temperatura y quantum base (-q) */
+                    uint32_t base = kernel->config.rr_quantum > 0 ? kernel->config.rr_quantum : 5;
                     uint32_t max_quantum;
-                    if (pcb->temperature >= 80) max_quantum = 1;
-                    else if (pcb->temperature >= 60) max_quantum = 2;
-                    else if (pcb->temperature >= 40) max_quantum = 4;
-                    else if (pcb->temperature >= 20) max_quantum = 6;
-                    else max_quantum = 10;
-                    
+                    if (pcb->temperature >= 80)      max_quantum = (base * 1) / 5;  /* 20% */
+                    else if (pcb->temperature >= 60) max_quantum = (base * 2) / 5;  /* 40% */
+                    else if (pcb->temperature >= 40) max_quantum = (base * 4) / 5;  /* 80% */
+                    else if (pcb->temperature >= 20) max_quantum = (base * 6) / 5;  /* 120% */
+                    else                              max_quantum = base * 2;        /* 200% */
+
                     /* Detectar expiración de quantum adaptativo */
                     if (pcb->ticks_since_swap >= max_quantum) {
                         quantum_expired_detected = 1;

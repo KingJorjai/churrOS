@@ -39,15 +39,27 @@ void scheduler_update_thread(Kernel* kernel, HWThread* thread,
                             uint32_t hw_thread);
 ```
 
-Esta función es llamada directamente desde `machine_advance_cycle()` cuando se detecta un evento que requiere decisión de scheduling.
+`machine_advance_cycle()` detecta eventos y los señaliza al kernel (`kernel_signal_scheduler()`); el hilo del scheduler despierta, bloquea la máquina y entonces invoca `scheduler_update_thread()` para cada HW thread afectado.
 
 ## Round Robin (RR)
 
-Round Robin es el algoritmo clásico de scheduling con quantum fijo (configurado por `-q`, default 5 ticks) y preemption obligatoria. El proceso es desalojado al expirar su quantum, garantizando equidad entre todos los procesos aunque con overhead de un context switch por quantum. Su implementación detecta quantum expirado en `machine_advance_cycle()` y llama a `scheduler_update_thread()`, donde procesos terminados son destruidos, procesos con quantum expirado vuelven a READY y se encolan, y se despacha el siguiente proceso o se crea IDLE si la cola está vacía.
+Round Robin es el algoritmo clásico de scheduling con quantum fijo (configurado por `-q`, default 5 ticks) y preemption obligatoria. El proceso es desalojado al expirar su quantum, garantizando equidad entre todos los procesos aunque con overhead de un context switch por quantum. La detección de quantum expirado ocurre en `machine_advance_cycle()`, que señaliza al scheduler; el hilo del scheduler aplica `scheduler_update_thread()` donde procesos terminados se destruyen, los preemptados vuelven a READY y se encolan, y se despacha el siguiente proceso o se crea IDLE si la cola está vacía.
 
 ### Características Clave
 
 Round Robin destaca por su simplicidad conceptual y buen tiempo de respuesta para procesos interactivos, garantizando equidad entre procesos. Sin embargo, sufre overhead de context switches frecuentes, donde quantums pequeños incrementan el overhead mientras quantums grandes deterioran el tiempo de respuesta. Los tests validan que la preemption ocurre exactamente al expirar el quantum, los procesos rotan equitativamente y los context switches se contabilizan correctamente.
+
+### Ejemplo de salida (v2)
+
+```plaintext
+Algoritmo: Round Robin (quantum=8 ticks)
+(0:0:0) Dispatch PID=1 (Reemplazando IDLE) TTL=0
+(0:0:1) Dispatch PID=2 (Reemplazando IDLE) TTL=0
+(0:0:1) Preemption PID=2 -> PID=4
+(0:0:0) Dispatch PID=5 (Reemplazando IDLE) TTL=0
+(0:0:0) Preemption PID=5 -> PID=7
+(0:1:0) Preemption PID=16 -> PID=17
+```
 
 ## FIFO (First In First Out)
 
@@ -105,6 +117,18 @@ Validaciones realizadas:
 - Context switches mínimos
 - Convoy effect observable en logs
 
+### Ejemplo de salida (v2)
+
+```plaintext
+Algoritmo: FIFO (quantum=5 ticks)
+(0:0:0) Dispatch PID=1 (Reemplazando IDLE) TTL=0
+(0:1:0) Dispatch PID=2 (Reemplazando IDLE) TTL=0
+(0:0:0) Proceso PID=1 terminado
+(0:0:0) Dispatch PID=3 TTL=0
+(0:1:0) Proceso PID=2 terminado
+(0:1:0) Dispatch PID=5 TTL=0
+```
+
 ## Chocolate Caliente (CH) - Innovación Propia
 
 ### Descripción
@@ -126,13 +150,14 @@ if (kernel->config.scheduler_algorithm == SCHEDULER_CHOCOLATE_CALIENTE) {
                       pcb->temperature + 8 : 100;
 }
 
-// En scheduler_thread_func() - Enfriar procesos en cola
-for (uint32_t i = 0; i < queue->size; i++) {
-    PCB* pcb = queue->processes[(queue->head + i) % queue->capacity];
+// Enfriamiento durante decisiones de scheduling (cola enlazada)
+ProcessNode* node = queue->head;
+while (node) {
+    PCB* pcb = node->pcb;
     if (pcb->temperature > 0) {
-        pcb->temperature = (pcb->temperature >= 5) ? 
-                          pcb->temperature - 5 : 0;
+        pcb->temperature = (pcb->temperature >= 5) ? pcb->temperature - 5 : 0;
     }
+    node = node->next;
 }
 ```
 
@@ -270,16 +295,17 @@ Validaciones realizadas:
 - quantum_base escala correctamente todos los quantums
 
 ### Ejemplo de Salida
-
+```plaintext
+Algoritmo: Chocolate Caliente (Quantum base: 5 ticks)
+(0:0:0) PID=1 Temp=40°C 🟡 Quantum=4 Ticks=5/4 TTL=0
+(0:0:0) Context switch PID=1 (enfriándose) -> PID=2 (quantum=10)
+(0:0:0) PID=2 Temp=43°C 🟡 Quantum=4 Ticks=1/4 TTL=0
+(0:0:0) PID=2 Temp=67°C 🔴 Quantum=2 Ticks=4/2 TTL=0
+(0:0:0) Context switch PID=2 (enfriándose) -> PID=3 (quantum=10)
+(0:0:0) PID=3 Temp=16°C ❄️ Quantum=10 Ticks=2/10 TTL=0
 ```
-[INFO] [Sched] Dispatch PID=5 temp=0°C quantum=10 TTL=67
-[NOTICE] [Sched] PID=5 Preempted temp=22°C quantum=6→6 ticks
-[INFO] [Sched] Dispatch PID=5 temp=45°C quantum=4 TTL=55
-[NOTICE] [Sched] PID=5 Preempted temp=68°C quantum=4→2 ticks
-[INFO] [Sched] Dispatch PID=5 temp=85°C quantum=1 TTL=48
-```
 
-Se observa claramente cómo el proceso se calienta progresivamente y su quantum se reduce.
+Se observa claramente cómo el proceso ejecutando se calienta y reduce su quantum, mientras los procesos en cola se enfrían y reciben quantums más largos.
 
 ## Comparativa de Algoritmos
 
@@ -405,7 +431,7 @@ Componentes disponibles:
 
 #### Ejemplo de Salida
 
-```
+```plaintext
 [INFO] [Kernel] Starting simulation...
 [INFO] [Clock] (0:0:0) Tick 1
 [INFO] [Sched] (0:0:0) Dispatch PID=1 temp=0°C quantum=10 TTL=45
@@ -415,9 +441,9 @@ Componentes disponibles:
 
 ## Testing Automatizado
 
-### Suite de 30 Tests
+### Suite de 34 Tests
 
-El script `run_tests.sh` ejecuta 30 tests organizados en 6 secciones:
+El script `run_tests.sh` ejecuta 34 tests organizados en 6 secciones:
 
 1. **Round Robin** (3 tests): Preemption, quantum corto, multicore
 2. **FIFO** (3 tests): Sin preemption, generación rápida, multicore

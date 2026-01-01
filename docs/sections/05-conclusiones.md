@@ -80,7 +80,7 @@ Los tests demuestran el comportamiento esperado de cada algoritmo:
 **Scheduling:**
 - El diseño event-driven reduce overhead significativamente
 - El quantum adaptativo puede mejorar equidad sin sacrificar throughput
-- La visualización (emojis, colores) ayuda enormemente en debugging
+- La visualización (emojis, colores) ayuda enormemente en la depuración
 
 **Memoria:**
 - El TLB es crítico para rendimiento (hit rate >85% es esencial)

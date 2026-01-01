@@ -1,56 +1,54 @@
 # Parte 1: Arquitectura Base del Kernel
-
-## Introducción
-
-La primera parte del proyecto establece los fundamentos del simulador: el motor de tiempo (Clock), el sistema de generación de procesos (Timer y Process Generator), y los mecanismos de sincronización multihilo que permiten la coordinación entre todos los componentes.
-
-## Arquitectura General
-
-El sistema implementa una arquitectura modular donde cada componente tiene responsabilidades claramente definidas. El Kernel actúa como orquestador principal, coordinando el Clock que genera ticks periódicos, la Machine que simula la arquitectura hardware, y el Scheduler event-driven que responde a eventos específicos.
-
-```{.mermaid format=pdf}
-graph TD
-    K[Kernel] --> C[Clock]
-    K --> M[Machine]
-    K --> S[Scheduler]
-    K --> T[Timer]
-    K --> PQ[Process Queue]
-    
-    C --> M
-    T --> PG[Process Generator]
-    PG --> PQ
-    M --> S
-    
-    M --> CPU[CPUs]
-    CPU --> Core[Cores]
-    Core --> HWT[HW Threads]
-    
-    S -.evento.-> M
-```
-
-Los eventos principales del sistema incluyen quantum expirado, proceso terminado y creación de nuevo proceso, todos gestionados de forma asíncrona mediante señalización.
-
-## Clock: Motor del Sistema
-
-El Clock actúa como corazón del simulador, generando pulsos periódicos (ticks) que impulsan todo el sistema. Su implementación utiliza un bucle activo que espera el tiempo configurado, incrementa el contador global de ticks, llama a `machine_advance_cycle()`, detecta eventos para scheduling y notifica al Timer. Esta aproximación se eligió por su simplicidad de debugging, precisión en el control de velocidad, portabilidad entre sistemas operativos y comportamiento determinístico. El uso de `usleep()` permite configurar la velocidad de simulación mediante el flag `-s` sin necesidad de recompilar.
-
-## Timer: Generador de Interrupciones
+### Process Queue
 
 ### Diseño
 
-El Timer implementa un temporizador que genera interrupciones periódicas para el Process Generator. Su funcionamiento es análogo a un timer hardware que cuenta ciclos y genera interrupciones cuando se alcanza el periodo configurado.
+La cola de procesos es una estructura FIFO thread-safe basada en lista enlazada que almacena procesos en estado READY. Implementa las operaciones básicas:
 
-### Implementación
+- `enqueue()`: Añadir proceso al final
+- `dequeue()`: Extraer proceso del principio
+- `is_empty()`: Verificar si está vacía
+
+### Implementación Thread-Safe
 
 ```c
-void timer_tick(Timer* timer)
+typedef struct process_node {
+    PCB* pcb;
+    struct process_node* next;
+} ProcessNode;
+
+typedef struct {
+    ProcessNode* head;
+    ProcessNode* tail;
+    uint32_t count;
+    pthread_mutex_t mutex;
+} ProcessQueue;
+```
+
+Toda operación está protegida por mutex y la estructura crece dinámicamente por nodos:
+
+```c
+int process_queue_enqueue(ProcessQueue* queue, PCB* pcb)
 {
-    pthread_mutex_lock(&timer->mutex);
-    timer->ticks_since_last_interrupt++;
-    
-    if (timer->ticks_since_last_interrupt >= timer->period) {
-        timer->ticks_since_last_interrupt = 0;
-        pthread_cond_signal(&timer->interrupt_cond);
+    ProcessNode* node = malloc(sizeof(ProcessNode));
+    node->pcb = pcb;
+    node->next = NULL;
+    pthread_mutex_lock(&queue->mutex);
+    if (queue->tail) { queue->tail->next = node; queue->tail = node; }
+    else { queue->head = node; queue->tail = node; }
+    queue->count++;
+    pthread_mutex_unlock(&queue->mutex);
+    return 0;
+}
+```
+
+### Decisiones de Diseño
+
+**¿Por qué lista enlazada en lugar de array circular?**
+
+- **Simplicidad**: Inserción/extracción constantes sin redimensionar
+- **Flexibilidad**: Crecimiento dinámico sin gestionar capacidad
+- **Concurrencia**: Menos riesgo de errores en redimensionados concurrentes
     }
     
     pthread_mutex_unlock(&timer->mutex);
@@ -130,6 +128,7 @@ typedef struct {
 
 ```c
 typedef enum {
+    PROCESS_STATE_NEW,         // Recién creado, aún sin despachar
     PROCESS_STATE_READY,       // Listo para ejecutar
     PROCESS_STATE_RUNNING,     // Ejecutando
     PROCESS_STATE_TERMINATED   // Terminado
@@ -148,7 +147,7 @@ PCB* pcb_create_random(uint32_t pid)
     PCB* pcb = malloc(sizeof(PCB));
     pcb->pid = pid;
     pcb->ttl = (rand() % 91) + 10;  // TTL entre 10-100 ticks
-    pcb->state = PROCESS_STATE_READY;
+    pcb->state = PROCESS_STATE_NEW;  // pasa a READY al encolarse
     pcb->temperature = 0;
     pcb->ticks_since_swap = 0;
     pcb->is_loaded = 0;
@@ -156,58 +155,7 @@ PCB* pcb_create_random(uint32_t pid)
 }
 ```
 
-## Process Queue
-
-### Diseño
-
-La cola de procesos es una estructura FIFO thread-safe que almacena todos los procesos en estado READY. Implementa las operaciones básicas:
-
-- `enqueue()`: Añadir proceso al final
-- `dequeue()`: Extraer proceso del principio
-- `is_empty()`: Verificar si está vacía
-
-### Implementación Thread-Safe
-
-```c
-typedef struct {
-    PCB** processes;
-    uint32_t head;
-    uint32_t tail;
-    uint32_t size;
-    uint32_t capacity;
-    pthread_mutex_t mutex;
-} ProcessQueue;
-```
-
-Toda operación está protegida por mutex:
-
-```c
-void process_queue_enqueue(ProcessQueue* queue, PCB* pcb)
-{
-    pthread_mutex_lock(&queue->mutex);
-    
-    // Redimensionar si es necesario
-    if (queue->size >= queue->capacity) {
-        queue->capacity *= 2;
-        queue->processes = realloc(queue->processes, 
-                                  queue->capacity * sizeof(PCB*));
-    }
-    
-    queue->processes[queue->tail] = pcb;
-    queue->tail = (queue->tail + 1) % queue->capacity;
-    queue->size++;
-    
-    pthread_mutex_unlock(&queue->mutex);
-}
-```
-
-### Decisiones de Diseño
-
-**¿Por qué un array circular en lugar de lista enlazada?**
-
-- **Eficiencia**: Mejor localidad de cache
-- **Simplicidad**: Menos punteros, menos posibilidad de bugs
-- **Redimensionamiento dinámico**: Soporta crecimiento sin fragmentación
+<!-- Sección duplicada eliminada: la cola real está documentada arriba como lista enlazada -->
 
 ## Machine: Simulación Hardware
 
@@ -365,30 +313,8 @@ void kernel_signal_scheduler(Kernel* kernel)
 // Consumidor (Scheduler)
 void* scheduler_thread_func(void* arg)
 {
-    Kernel* kernel = (Kernel*)arg;
-    
-    while (1) {
-        pthread_mutex_lock(&kernel->scheduler_mutex);
-        
-        while (!kernel->scheduler_needs_update && 
-               !kernel->shutdown_requested) {
-            pthread_cond_wait(&kernel->scheduler_cond, 
-                            &kernel->scheduler_mutex);
-        }
-        
-        if (kernel->shutdown_requested) {
-            pthread_mutex_unlock(&kernel->scheduler_mutex);
-            break;
-        }
-        
-        kernel->scheduler_needs_update = 0;
-        pthread_mutex_unlock(&kernel->scheduler_mutex);
-        
-        // El scheduling real ocurre en machine_advance_cycle()
-        // Este thread solo maneja enfriamiento de procesos en cola
-    }
-    
-    return NULL;
+    // El scheduler espera eventos y aplica cambios de contexto
+    // El enfriamiento de procesos en cola se realiza durante los context switches
 }
 ```
 
@@ -424,7 +350,7 @@ $ ./build/churros -c 1 -o 1 -t 1 -q 5 -g 10 -s 100 -d 50 -l info
 ```
 
 Salida esperada:
-```
+```plaintext
 [INFO] [Kernel] Kernel inicializado
 [INFO] [Clock] Clock iniciado (velocidad: 100ms)
 [INFO] [Timer] Timer configurado (periodo: 10 ticks)
