@@ -2,9 +2,9 @@
 
 ## Introducción
 
-En esta primera parte pusimos los cimientos del simulador. Implementamos el Clock que genera los pulsos de tiempo, un Timer configurable para interrupciones periódicas, y los componentes básicos de gestión de procesos: la cola (ProcessQueue), los PCBs y un generador automático de procesos.
+En esta primera parte he puesto los cimientos del simulador. He implementado el Clock que genera los pulsos de tiempo, un Timer configurable para interrupciones periódicas, y los componentes básicos de gestión de procesos: la cola (ProcessQueue), los PCBs y un generador automático de procesos.
 
-Modelamos el hardware con el componente Machine, que representa la jerarquía de CPUs, cores y hardware threads. Todo funciona con múltiples hilos usando primitivas POSIX (`pthread_mutex_t`, `pthread_cond_t`).
+He modelado el hardware con el componente Machine, que representa la jerarquía de CPUs, cores y hardware threads. Todo funciona con múltiples hilos usando primitivas POSIX (`pthread_mutex_t`, `pthread_cond_t`).
 
 Esta parte se centra solo en la infraestructura base —el scheduler llega en la Parte 2 y la memoria virtual en la Parte 3.
 
@@ -44,7 +44,7 @@ La sincronización es el eje central: todos los componentes cooperan mediante pr
 
 ### Clock
 
-El Clock es el corazón del sistema, el que produce los ticks de tiempo. Cada tick despierta a los consumidores que están esperando. Lo implementamos completamente thread-safe para que múltiples hilos puedan consumir ticks sin problemas.
+El Clock es el corazón del sistema, el que produce los ticks de tiempo. Cada tick despierta a los consumidores que están esperando. Lo he implementado completamente thread-safe para que múltiples hilos puedan consumir ticks sin problemas.
 
 La función central `clock_pulse()` incrementa el contador de ticks y despierta a todos los hilos bloqueados en `clock_wait_tick()` mediante broadcast. La variable `last` permite a los consumidores detectar si han perdido algún tick (cuando el sistema está muy cargado), comparándola con el tick actual. Además, `clock_get_tick()` permite consultas no bloqueantes y `clock_shutdown()` finaliza ordenadamente todos los consumidores.
 
@@ -82,7 +82,7 @@ sequenceDiagram
     PG->>PG: Procesar tick
 ```
 
-Los consumidores llaman a `clock_wait_tick()` pasando su último tick conocido. La función detecta automáticamente si se perdieron ticks (por sobrecarga del sistema o latencia de scheduling) comparando el tick actual con el último procesado. Esto es importante para saber si nos hemos retrasado.
+Los consumidores llaman a `clock_wait_tick()` pasando su último tick conocido. La función detecta automáticamente si se han perdido ticks (por sobrecarga del sistema o latencia de scheduling) comparando el tick actual con el último procesado. Esto es importante para saber si el sistema se ha retrasado.
 
 El shutdown usa una flag `is_running` que despierta a todos los hilos en espera sin incrementar el tick, dejándoles terminar ordenadamente.
 
@@ -113,23 +113,26 @@ En esta primera parte, el PCB es minimalista: solo contiene el PID único que id
 stateDiagram-v2
     [*] --> NEW: pcb_create()
     
+    NEW --> TERMINATED: TTL=0 (v1)
+    NEW --> READY: enqueue (v2+)
+    
+    READY --> RUNNING: dispatch (v2+)
+    RUNNING --> READY: preemption (v2+)
+    RUNNING --> TERMINATED: TTL=0 o EXIT (v2+)
+    
+    TERMINATED --> [*]: pcb_destroy()
+    
     note right of NEW
-        Parte 1: Solo PID y TTL
-        Sin estados explícitos
+        v1: Solo PID y TTL
+        Sin ProcessState enum
     end note
     
-    NEW --> TERMINATED: TTL = 0 (v1)
-    
-    note right of TERMINATED
-        Parte 2: Añade ciclo completo
-        NEW -> READY -> RUNNING -> TERMINATED
-        + ProcessState enum
-        + cpu_id, core_id, hw_thread_id
+    note right of RUNNING
+        v2+: Añade ProcessState
+        + cpu/core/thread IDs
         + ticks_since_swap
         + temperature
     end note
-    
-    TERMINATED --> [*]: pcb_destroy()
 ```
 
 #### Interfaz

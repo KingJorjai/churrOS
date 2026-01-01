@@ -2,9 +2,9 @@
 
 ## Introducción
 
-Esta segunda parte mete el scheduler, que es donde la cosa se pone interesante. En vez de hacer un scheduler clásico que se ejecuta periódicamente, montamos uno **completamente event-driven** que solo se activa cuando pasa algo importante.
+Esta segunda parte mete el scheduler, que es donde la cosa se pone interesante. En vez de hacer un scheduler clásico que se ejecuta periódicamente, he montado uno **completamente event-driven** que solo se activa cuando pasa algo importante.
 
-Sobre lo que ya teníamos de la Parte 1, añadimos `scheduler.c/h` y modificamos el kernel para que detecte eventos y avise al scheduler. Implementamos tres algoritmos:
+Sobre lo que ya tenía de la Parte 1, he añadido `scheduler.c/h` y he modificado el kernel para que detecte eventos y avise al scheduler. He implementado tres algoritmos:
 
 1. **Round Robin** (RR): Quantum fijo con preemption
 2. **FIFO**: Sin preemption (run to completion)
@@ -12,7 +12,7 @@ Sobre lo que ya teníamos de la Parte 1, añadimos `scheduler.c/h` y modificamos
 
 ## Arquitectura del Scheduler Event-Driven
 
-Nuestro scheduler solo despierta ante eventos específicos, no corre periódicamente desperdiciando CPU. Los tres eventos que lo activan son: (1) un proceso agota su TTL o ejecuta EXIT, liberando su hardware thread; (2) el quantum de un proceso expira en algoritmos con preemption (RR y Chocolate Caliente), requiriendo cambio de contexto; (3) el generador crea un proceso nuevo y lo encola, notificando que hay trabajo disponible.
+El scheduler solo despierta ante eventos específicos, no corre periódicamente desperdiciando CPU. Los tres eventos que lo activan son: (1) un proceso agota su TTL o ejecuta EXIT, liberando su hardware thread; (2) el quantum de un proceso expira en algoritmos con preemption (RR y Chocolate Caliente), requiriendo cambio de contexto; (3) el generador crea un proceso nuevo y lo encola, notificando que hay trabajo disponible.
 
 ```{.mermaid format=pdf}
 flowchart TD
@@ -170,7 +170,7 @@ Solo planifica cuando el proceso termina (TTL=0). Destruye el PCB actual, despac
 
 ## Chocolate Caliente
 
-Este es nuestro algoritmo original, y nos gusta bastante. La idea es simple: imagina un chocolate caliente —si está muy caliente, tienes que dar sorbitos pequeños (quantum bajo). Si está frío, puedes dar tragos más grandes (quantum alto). Aplicamos esta metáfora a los procesos usando su "temperatura".
+Este es mi algoritmo original, y me gusta bastante. La idea es simple: imagina un chocolate caliente —si está muy caliente, tienes que dar sorbitos pequeños (quantum bajo). Si está frío, puedes dar tragos más grandes (quantum alto). He aplicado esta metáfora a los procesos usando su "temperatura".
 
 ### Modelo de Temperatura
 
@@ -253,18 +253,18 @@ Con `quantum_base=5` (por defecto):
 **Ejemplo de evolución:**
 
 ```plaintext
-Tick  Temp  Quantum  Acción
-----------------------------------------
-0     0°C   10       Proceso despachado (frío)
-5     5°C   10       Ejecutando...
-10    10°C  10       Quantum agotado → Preemption
-      5°C   10       Enfriado en cola (-5°C)
-15    15°C  10       Re-despachado
-25    25°C  6        Quantum agotado (templado)
-      20°C  10       Enfriado en cola
-30    30°C  6        Re-despachado
+Tick  Temp   Quantum  Acción
+--------------------------------------------
+0     0°C    10       Proceso despachado (frío)
+5     5°C    10       Ejecutando...
+10    10°C   10       Quantum agotado → Preemption
+      5°C    10       Enfriado en cola (-5°C)
+15    15°C   10       Re-despachado
+25    25°C   6        Quantum agotado (templado)
+      20°C   10       Enfriado en cola
+30    30°C   6        Re-despachado
 ...
-90    90°C  1        Ardiendo! (quantum mínimo)
+90    90°C   1        Ardiendo! (quantum mínimo)
 ```
 
 La función `get_max_quantum_by_temperature()` implementa la tabla:
@@ -311,7 +311,7 @@ Quantum adaptativo funciona: procesos fríos reciben 10 ticks, procesos ardiendo
 | **Round Robin** | Alto | Bueno | Alto | Total |
 | **Chocolate Caliente** | Adaptativo | Muy bueno | Medio | Proporcional |
 
-Chocolate Caliente encontró un buen balance:
+Chocolate Caliente ha encontrado un buen balance:
 - Menos cambios de contexto que RR cuando hay procesos largos (no fuerza preemption innecesariamente)
 - Mejor respuesta que FIFO para procesos cortos (gracias al quantum adaptativo)
 - Equidad proporcional al comportamiento —los procesos interactivos salen ganando
@@ -332,11 +332,11 @@ Este diseño serializa completamente el scheduling: solo un scheduler puede corr
 
 ### Event-Driven vs Periódico
 
-Optamos por un scheduler event-driven en lugar de uno que se ejecute periódicamente. Esto reduce el overhead de CPU (el scheduler solo trabaja cuando hace falta) y refleja mejor el comportamiento de kernels reales donde el scheduler es invocado por interrupciones específicas (timer interrupt, I/O completion, etc.).
+He optado por un scheduler event-driven en lugar de uno que se ejecute periódicamente. Esto reduce el overhead de CPU (el scheduler solo trabaja cuando hace falta) y refleja mejor el comportamiento de kernels reales donde el scheduler es invocado por interrupciones específicas (timer interrupt, I/O completion, etc.).
 
 ### Temperatura como Métrica
 
-Elegimos temperatura como métrica para Chocolate Caliente (en lugar de prioridades estáticas o aging clásico) por su simplicidad conceptual y efectividad práctica. La temperatura captura implícitamente el comportamiento del proceso: procesos CPU-bound se calientan rápido, procesos I/O-bound se mantienen fríos.
+He elegido temperatura como métrica para Chocolate Caliente (en lugar de prioridades estáticas o aging clásico) por su simplicidad conceptual y efectividad práctica. La temperatura captura implícitamente el comportamiento del proceso: procesos CPU-bound se calientan rápido, procesos I/O-bound se mantienen fríos.
 
 ### Enfriamiento Proporcional
 

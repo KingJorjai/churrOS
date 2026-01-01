@@ -2,9 +2,9 @@
 
 ## Introducción
 
-La tercera parte cierra el círculo: memoria virtual completa. Sobre lo que ya teníamos (Parte 1 y 2), añadimos `memory.c/h`, `loader.c/h` e `instruction.c/h`, más un generador de programas que llamamos `prometheus`.
+La tercera parte cierra el círculo: memoria virtual completa. Sobre lo que ya tenía (Parte 1 y 2), he añadido `memory.c/h`, `loader.c/h` e `instruction.c/h`, más un generador de programas que he llamado `prometheus`.
 
-Qué implementamos:
+Qué he implementado:
 
 - **MMU** (Memory Management Unit) con traducción virtual $\rightarrow$ física
 - **TLB** (Translation Lookaside Buffer) de 16 entradas para cachear traducciones
@@ -12,11 +12,11 @@ Qué implementamos:
 - **Loader** de programas en formato texto plano con asignación dinámica de frames
 - **ISA** básico con instrucciones LOAD, STORE, ADD, EXIT
 
-**Nota sobre "ELF"**: Aunque llamamos a los archivos `.elf` y al componente "loader ELF", **NO usamos el formato binario ELF estándar**. Usamos archivos de texto plano con directivas `.text` y `.data` seguidas de instrucciones en hexadecimal. Mantuvimos el nombre ".elf" por consistencia con el enunciado, pero técnicamente es un formato custom.
+**Nota sobre "ELF"**: Aunque llamo a los archivos `.elf` y al componente "loader ELF", **NO uso el formato binario ELF estándar**. Uso archivos de texto plano con directivas `.text` y `.data` seguidas de instrucciones en hexadecimal. He mantenido el nombre ".elf" por consistencia con el enunciado, pero técnicamente es un formato custom.
 
 ## Arquitectura de Memoria
 
-Tenemos 16MB de direcciones (24 bits), divididos así:
+Tengo 16MB de direcciones (24 bits), divididos así:
 
 - **Kernel Space**: 1MB (primeros 256 frames) reservados
 - **User Space**: 15MB (3840 frames) para procesos de usuario
@@ -104,7 +104,7 @@ Recorre el bitmap desde `kernel_end_frame` buscando el primer bit a 0. Lo setea 
 
 ## TLB (Translation Lookaside Buffer)
 
-El TLB es una caché asociativa de 16 entradas que guarda traducciones VPN $\rightarrow$ PFN recientes. Reduce un montón los accesos a la Page Table —en nuestras pruebas vimos mejoras de $6\times$ a $10\times$.
+El TLB es una caché asociativa de 16 entradas que guarda traducciones VPN $\rightarrow$ PFN recientes. Reduce un montón los accesos a la Page Table —en mis pruebas he visto mejoras de $6\times$ a $10\times$.
 
 ### Estructura
 
@@ -221,9 +221,9 @@ Traducción de dirección virtual `0x001234` paso a paso:
 
 ```plaintext
 1. Dirección virtual: 0x001234
-   ┌──────────────┬──────────────┐
+   ┌──────────────┬───────────────┐
    │  VPN = 0x001 │ Offset = 0x234│
-   └──────────────┴──────────────┘
+   └──────────────┴───────────────┘
      bits 23-12      bits 11-0
    
 2. TLB Lookup (VPN=0x001):
@@ -260,7 +260,7 @@ paddr = 0x100240 (sin acceso a Page Table)
 
 ## Conjunto de Instrucciones (ISA)
 
-Para validar que la memoria virtual funciona, implementamos un ISA minimalista con 4 instrucciones. No hace falta más:
+Para validar que la memoria virtual funciona, he implementado un ISA minimalista con 4 instrucciones. No hace falta más:
 
 ### Formato de Instrucción
 
@@ -528,7 +528,7 @@ Usamos 4KB como tamaño de página, el estándar en arquitecturas x86/x64. Equil
 
 ### TLB de 16 Entradas
 
-Un TLB de 16 entradas es pequeño comparado con hardware real (~512-1024 entradas en CPUs modernos), pero suficiente para nuestro simulador. Nos dejó observar tanto HITs como MISSes en las trazas, validando la política de reemplazo LRU. Con programas que acceden a 3-5 páginas diferentes, un TLB de 16 entradas mantiene todas las traducciones activas en caché, explicando los hit rates altos ($85\%-95\%$).
+Un TLB de 16 entradas es pequeño comparado con hardware real (~512-1024 entradas en CPUs modernos), pero suficiente para mi simulador. Me ha permitido observar tanto HITs como MISSes en las trazas, validando la política de reemplazo LRU. Con programas que acceden a 3-5 páginas diferentes, un TLB de 16 entradas mantiene todas las traducciones activas en caché, explicando los hit rates altos ($85\%-95\%$).
 
 ### MMU por Hardware Thread
 
@@ -536,7 +536,7 @@ Cada hardware thread tiene su propia MMU independiente con TLB privado. Esta dec
 
 Al despachar un proceso, el scheduler configura la MMU del thread de destino. La operación crítica es `mmu_set_ptbr(pcb->mm.pgb)`, que actualiza el Page Table Base Register apuntando a la tabla de páginas del proceso nuevo. Este cambio de puntero modifica instantáneamente el espacio de direcciones visible: las mismas direcciones virtuales ahora se traducen a frames físicos completamente diferentes.
 
-Al cambiar el PTBR, el TLB queda automáticamente inválido porque sus entradas apuntan a traducciones del proceso anterior. Nuestra implementación hace flush explícito con `tlb_invalidate()`, marcando todas las entradas como invalid=0. El proceso nuevo empieza con TLB frío, sufriendo misses hasta que se calientan las traducciones más usadas.
+Al cambiar el PTBR, el TLB queda automáticamente inválido porque sus entradas apuntan a traducciones del proceso anterior. La implementación hace flush explícito con `tlb_invalidate()`, marcando todas las entradas como invalid=0. El proceso nuevo empieza con TLB frío, sufriendo misses hasta que se calientan las traducciones más usadas.
 
 El PC (Program Counter) también se actualiza a `pcb->mm.code_start`, posicionando la ejecución al inicio del segmento de código del proceso. La primera instrucción fetcheada desencadena traducciones de dirección y posiblemente page faults si el código no está mapeado aún (demand paging).
 
