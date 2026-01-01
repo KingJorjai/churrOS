@@ -142,7 +142,7 @@ PCB* pcb_create(uint32_t pid);
 void pcb_destroy(PCB* pcb);
 ```
 
-En v1, `pcb_create()` toma solo el PID y genera internamente un TTL aleatorio entre 10 y 100 ticks. La función `pcb_create_idle()` se añade en la Parte 2 para crear procesos IDLE (PID=0) cuando no hay trabajo disponible.
+En v1, `pcb_create()` toma solo el PID y genera internamente un TTL aleatorio entre 1 y 100 ticks. La función `pcb_create_idle()` se añade en la Parte 2 para crear procesos IDLE (PID=0) cuando no hay trabajo disponible.
 
 ### Process Queue
 
@@ -153,7 +153,7 @@ La cola implementa FIFO thread-safe clásico con lista enlazada: punteros `head`
 El Process Generator crea procesos automáticamente usando un Timer dedicado. Cada vez que el Timer genera una interrupción (configurable con `-g`, por defecto cada 10 ticks), el generador crea un PCB nuevo con:
 
 1. **PID único**: Obtenido de `kernel_get_next_pid()` que usa un contador atómico protegido por mutex
-2. **TTL aleatorio**: Tiempo de vida entre 10 y 100 ticks generado con `rand()`
+2. **TTL aleatorio**: Tiempo de vida entre 1 y 100 ticks generado con `rand()`
 3. **Estado inicial**: NEW, listo para ser encolado
 
 El generador ejecuta en su propio hilo (`process_generator_thread_func`) bloqueando en `churros_timer_wait_interrupt()` hasta que el Timer lo despierta. Al despertar, crea el PCB con `pcb_create()`, lo encola con `process_queue_enqueue()` y registra el evento en los logs. Este diseño desacopla completamente la generación de procesos del Clock principal.
@@ -216,11 +216,11 @@ La función `machine_create()` reserva memoria para toda la jerarquía y inicial
 
 ### Process Generator
 
-Un hilo que despierta con interrupciones del Timer, genera PIDs únicos y crea procesos con TTL aleatorio (10-100 ticks). El ciclo de operación:
+Un hilo que despierta con interrupciones del Timer, genera PIDs únicos y crea procesos con TTL aleatorio (1-100 ticks). El ciclo de operación:
 
 1. Bloquea en `timer_wait_interrupt()` hasta que el timer alcanza su periodo
 2. Obtiene PID único con `kernel_allocate_pid()` (contador global protegido por mutex)
-3. Genera TTL aleatorio con `rand()` (rango 10-100 ticks)
+3. Genera TTL aleatorio con `rand()` (rango 1-100 ticks)
 4. Crea el PCB con `pcb_create()`
 5. Lo encola con `process_queue_enqueue()`
 6. Señaliza al scheduler con `kernel_signal_scheduler()`
@@ -284,6 +284,6 @@ Optamos por el patrón clásico de mutex + variable de condición en lugar de al
 
 ### TTL Aleatorio
 
-Los procesos se generan con TTL aleatorio entre 10 y 100 ticks. Así simulamos cargas de trabajo heterogéneas, donde algunos procesos son cortos (interactivos) y otros son largos (batch), validando mejor el comportamiento de los algoritmos de scheduling en la Parte 2.
+Los procesos se generan con TTL aleatorio entre 1 y 100 ticks. Así simulamos cargas de trabajo heterogéneas, donde algunos procesos son cortos (interactivos) y otros son largos (batch), validando mejor el comportamiento de los algoritmos de scheduling en la Parte 2.
 
 \newpage

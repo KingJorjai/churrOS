@@ -176,10 +176,10 @@ Este es mi algoritmo original, y me gusta bastante. La idea es simple: imagina u
 
 Cada proceso tiene una temperatura que evoluciona dinámicamente según dos reglas:
 
-**Calentamiento (+1°C por tick):**
+**Calentamiento (+8°C por tick):**
 
 - Ocurre mientras el proceso ejecuta en un hardware thread
-- Es lineal y acumulativo, sin límite superior
+- Es lineal y acumulativo, con límite máximo de 100°C
 - Captura cuánto CPU ha consumido recientemente
 
 **Enfriamiento (-5°C por context switch):**
@@ -256,15 +256,15 @@ Con `quantum_base=5` (por defecto):
 Tick  Temp   Quantum  Acción
 --------------------------------------------
 0     0°C    10       Proceso despachado (frío)
-5     5°C    10       Ejecutando...
-10    10°C   10       Quantum agotado → Preemption
-      5°C    10       Enfriado en cola (-5°C)
-15    15°C   10       Re-despachado
-25    25°C   6        Quantum agotado (templado)
-      20°C   10       Enfriado en cola
-30    30°C   6        Re-despachado
-...
-90    90°C   1        Ardiendo! (quantum mínimo)
+1     8°C    10       Ejecutando...
+2     16°C   10       Ejecutando...
+10    80°C   1        Quantum agotado → Preemption
+      75°C   2        Enfriado en cola (-5°C)
+11    83°C   1        Re-despachado
+12    91°C   1        Quantum agotado (ardiendo)
+      86°C   1        Enfriado en cola
+13    94°C   1        Re-despachado
+14    100°C  1        Límite máximo alcanzado
 ```
 
 La función `get_max_quantum_by_temperature()` implementa la tabla:
@@ -285,7 +285,7 @@ Si se agota y hay cola no vacía, ejecuta preemption igual que RR: desaloja actu
 
 Este enfriamiento global tras cada context switch es caro (O(n) donde n=tamaño de cola), pero crítico para el comportamiento del algoritmo. Sin él, procesos esperando no recuperarían quantums largos. La implementación usa dequeue/enqueue para recorrer, manteniendo el orden FIFO.
 
-La temperatura también se incrementa en `machine_advance_cycle()` para procesos en RUNNING: +1°C por tick. Esto significa que el calentamiento es automático (no requiere lógica del scheduler), mientras que el enfriamiento es explícito (requiere acción del scheduler).
+La temperatura también se incrementa en `machine_advance_cycle()` para procesos en RUNNING: +8°C por tick. Esto significa que el calentamiento es automático (no requiere lógica del scheduler), mientras que el enfriamiento es explícito (requiere acción del scheduler).
 
 ### Comportamiento
 
