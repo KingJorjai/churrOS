@@ -1,2 +1,5 @@
 # Mermaid error logs
 *.err
+
+# Pandoc generated files
+memoria.pdf
