@@ -4,17 +4,17 @@
 PANDOC = pandoc
 
 # Directorios
-MEMORIA_DIR = memoria
+SECTIONS_DIR = sections
 
 # Archivo de metadatos
-METADATA = $(MEMORIA_DIR)/metadata.yaml
+METADATA = metadata.yaml
 
 # Archivos fuente en orden
-SOURCES = $(MEMORIA_DIR)/memoria.md \
-          $(MEMORIA_DIR)/parte1.md \
-          $(MEMORIA_DIR)/parte2.md \
-          $(MEMORIA_DIR)/parte3.md \
-          $(MEMORIA_DIR)/conclusiones.md
+SOURCES = $(SECTIONS_DIR)/01-resumen.md \
+          $(SECTIONS_DIR)/02-arquitectura-base.md \
+          $(SECTIONS_DIR)/03-scheduler.md \
+          $(SECTIONS_DIR)/04-memoria-virtual.md \
+          $(SECTIONS_DIR)/05-conclusiones.md
 
 # Archivos de salida
 OUTPUT = memoria.pdf
